@@ -1,0 +1,68 @@
+#!/bin/zsh
+
+# Go to a subdirectory $1 if it is in direct line from where we are to the
+# root of the repo.
+g() {
+    if [ "$#" -ne 1 ]; then
+        echo "Usage: $0 <dir>" >&2
+        return 1
+    fi
+
+    if [[ $(git rev-parse --is-inside-work-tree 2> /dev/null) != 'true' ]]; then
+        echo "Not in a git repository"
+        return 1
+    fi
+
+    local ROOT_PATH=$(git rev-parse --show-toplevel)
+    # Note: parent dir is ${ROOT_PATH%/*}
+    local START_PWD=$PWD
+    local RESULTS
+
+    if [[ $PWD == $ROOT_PATH ]]; then
+        RESULTS=((src|docs|etc|bin)/**/$1(N))    # list of directories, noglob
+
+        if [[ ${#RESULTS[@]} -eq 1 ]]; then
+            # One directory found: go there.
+            cd $RESULTS;
+            return 0
+        elif [[ ${#RESULTS[@]} -gt 1 ]]; then
+            # Multiple directories found: print the list.
+            echo "Ambiguous:"
+            print -l $RESULTS
+            return 1
+        fi
+    fi
+
+    # Try to find it from each directory up to the root of the repo
+    while [[ $PWD != $ROOT_PATH ]]; do
+        RESULTS=(**/$1/(N))    # list of directories, noglob
+        #RESULTS=(${=RESULTS})  # transform RESULT into a list of strings
+
+        if [[ ${#RESULTS[@]} -eq 1 ]]; then
+            # One directory found: go there.
+            cd $RESULTS;
+            return 0
+        elif [[ ${#RESULTS[@]} -gt 1 ]]; then
+            # Multiple directories found: print the list.
+            echo "Ambiguous:"
+            print -l $RESULTS
+            return 1
+        fi
+
+        # Go up and try again.
+        cd ..
+    done
+
+    # At the root of the repo: $1 must be a direct subdir
+    RESULTS=($1/(N))       # directory, noglob
+    #RESULTS=(${=RESULTS})  # transform RESULT into a list of strings
+
+    if [[ ${#RESULTS[@]} -eq 1 ]]; then
+        # One directory found: go there.
+        cd $RESULTS;
+        return 0
+    fi
+
+    echo "Not found: $1"
+    cd $START_PWD
+}

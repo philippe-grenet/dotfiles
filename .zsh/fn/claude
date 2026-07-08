@@ -1,0 +1,11 @@
+#!/bin/zsh
+
+claude() {
+    unset http{,s}_proxy
+    unset noproxy
+    env -i \
+        HOME="$HOME" \
+        PATH="$PATH" \
+        TERM="$TERM" \
+        /opt/homebrew/bin/claude "$@"
+}

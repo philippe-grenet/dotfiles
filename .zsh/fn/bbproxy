@@ -1,0 +1,25 @@
+#!/bin/zsh
+
+# Turn BB proxy on and off.
+# Usage:
+#   $ bborpxy     => show status
+#   $ bbproxy on
+#   $ bbproxy off
+bbproxy() {
+    if [ "$#" -eq 0 ]; then
+       echo "http_proxy=$http_proxy"
+       echo "https_proxy=$https_proxy"
+    elif [ "$#" -eq 1 ]; then
+        if [[ "$1" == "on" ]]; then
+            export http{,s}_proxy="http://proxy.bloomberg.com:81"
+        elif [[ "$1" == "off" ]]; then
+            unset http{,s}_proxy
+        else
+            echo "Usage: bbproxy [on|off]. With no argument, print the proxy status."
+            #exit 1
+        fi
+    else
+        echo "Usage: bbproxy [on|off]. With no argument, print the proxy status."
+        #exit 1
+    fi
+}

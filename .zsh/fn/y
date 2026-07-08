@@ -1,0 +1,13 @@
+#!/bin/zsh
+
+# Run yazi. This id a wrapper that provides the ability to change the current working directory when exiting Yazi.
+# If you quit with q, it changes CWD.
+# If you quit with Q, it does not,
+
+function y() {
+	local tmp="$(mktemp -t "yazi-cwd.XXXXXX")" cwd
+	command yazi "$@" --cwd-file="$tmp"
+	IFS= read -r -d '' cwd < "$tmp"
+	[ "$cwd" != "$PWD" ] && [ -d "$cwd" ] && builtin cd -- "$cwd"
+	rm -f -- "$tmp"
+}

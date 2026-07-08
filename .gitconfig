@@ -1,0 +1,164 @@
+[url "bbgithub:"]
+    insteadof = https://bbgithub.dev.bloomberg.com/
+[init]
+    defaultBranch = main
+[user]
+	name = Philippe Grenet
+	email = pgrenet@bloomberg.net
+
+[color]
+	diff = auto
+	status = auto
+	branch = auto
+	wtf = auto
+
+[core]
+	excludesfile = /Users/pgrenet/.gitignore_global
+	editor = '/home/pgrenet/bin/emc' --wait
+    # git-delta: https://dandavison.github.io/delta/introduction.html
+    pager = delta
+
+[include]
+    path = ~/dot-files/delta-catppuccin.gitconfig
+
+[delta]
+    features = catppuccin-mocha
+    side-by-side = true
+
+[delta "interactive"]
+    keep-plus-minus-markers = false
+
+[alias]
+    # Show me my aliases!
+    alias = config --get-regexp ^alias
+
+    # Shortcuts
+	st = status
+	br = branch
+	co = checkout
+    lg = log --abbrev-commit --decorate --format=format:'%C(bold blue)%h%C(reset) %C(bold green)(%ar)%C(reset) %s %C(dim white)- %an%C(reset)%C(bold yellow)%d%C(reset)'
+	Kompare = difftool -t kompare
+
+    # Show the URL for the origin repo
+    origin = config --get remote.origin.url
+
+    # Date/time of last commit
+    last = log -1 --abbrev-commit --decorate --format=format:'%C(bold blue)%h%C(reset) %C(bold green)(%ar)%C(reset) %s %C(dim white)- %an%C(reset)'
+
+    # Show authors and number of lines of code
+    credit = "!f() { git ls-files | while read f; do git blame --line-porcelain $f | grep '^author '; done | sort -f | uniq -ic | sort -n; }; f"
+
+    # Update a branch from upstream and push to origin
+    # Usage: git syncfork develop
+    syncfork = "!f() { echo '>> git fetch upstream' && git fetch upstream && echo '\n>> git merge upstream/'$1 && git merge upstream/$1 && echo '\n>> git push origin '$1 && git push origin $1; }; f"
+	first = rev-list --max-parents=0 HEAD
+
+    # git pr 4 - creates local branch pr/4 from the github upstream (if it exists) or origin and checks it out
+    # git pr 4 someremote - creates local branch pr/4 from someremote remote and checks it out
+    pr  = "!f() { git fetch -fu ${2:-$(git remote |grep ^upstream || echo origin)} refs/pull/$1/head:pr/$1 && git checkout pr/$1; }; f"
+
+# git pr-clean - removes all pr/* branches from your local repo
+    pr-clean = "!git for-each-ref refs/heads/pr/* --format='%(refname)' | while read ref ; do branch=${ref#refs/heads/} ; git branch -D $branch ; done"
+
+# git pr-worktree 4            -> adds worktree ../<repo>-pr4 on branch pr/4
+    # git pr-worktree 4 someremote -> same, but fetches PR from someremote
+    pr-worktree = "!f() { \
+      pr=\"$1\"; \
+      remote=\"${2:-$(git remote | grep -qx upstream && echo upstream || echo origin)}\"; \
+      top=$(git rev-parse --show-toplevel) || exit; \
+      parent=$(dirname \"$top\"); \
+      repo=$(basename \"$top\"); \
+      wt=\"$parent/${repo}-pr${pr}\"; \
+      \
+      git fetch -fu \"$remote\" \"refs/pull/$pr/head:pr/$pr\" || exit; \
+      \
+      if git worktree list --porcelain | awk -v p=\"$wt\" '$1==\"worktree\"{w=$2} $1==\"worktree\"{ } END{}' >/dev/null 2>&1; then :; fi; \
+      if git worktree list --porcelain | awk -v p=\"$wt\" '$1==\"worktree\" && $2==p {found=1} END{exit !found}'; then \
+        echo \"Worktree already exists: $wt\"; \
+        exit 0; \
+      fi; \
+      \
+      git worktree add \"$wt\" \"pr/$pr\"; \
+      echo \"Created worktree: $wt\"; \
+    }; f"
+
+    # Undo the last commit, keeping all changes unstaged
+    uncommit = reset HEAD~1
+
+    # git new-worktree my-branch
+    # git new-worktree my-branch main
+    new-worktree = "!f() { \
+      branch=\"$1\"; \
+      base=\"${2:-HEAD}\"; \
+      \
+      if [ -z \"$branch\" ]; then \
+        echo \"Usage: git new-worktree <branch> [base]\"; \
+        exit 1; \
+      fi; \
+      \
+      top=$(git rev-parse --show-toplevel) || exit; \
+      parent=$(dirname \"$top\"); \
+      repo=$(basename \"$top\"); \
+      \
+      safe_branch=$(echo \"$branch\" | tr '/' '-'); \
+      wt=\"$parent/${repo}-${safe_branch}\"; \
+      \
+      if git worktree list --porcelain | awk -v p=\"$wt\" '$1==\"worktree\" && $2==p {found=1} END{exit !found}'; then \
+        echo \"Worktree already exists: $wt\"; \
+        exit 0; \
+      fi; \
+      \
+      git worktree add -b \"$branch\" \"$wt\" \"$base\"; \
+      echo \"Created worktree: $wt\"; \
+    }; f"
+
+[color "status"]
+	untracked = yellow
+
+[credential]
+	helper = osxkeychain
+
+[difftool "sourcetree"]
+	cmd = opendiff \"$LOCAL\" \"$REMOTE\"
+	path =
+
+[mergetool "sourcetree"]
+	cmd = /Applications/Sourcetree.app/Contents/Resources/opendiff-w.sh \"$LOCAL\" \"$REMOTE\" -ancestor \"$BASE\" -merge \"$MERGED\"
+	trustExitCode = true
+
+[commit]
+	template = /Users/pgrenet/.stCommitMsg
+
+[http "https://github.com"]
+	sslVerify = false
+
+# Recommended by https://bbgithub.dev.bloomberg.com/Local-Development/mac-bootstrap
+[url "bbgithub:"]
+	insteadof = https://bbgithub.dev.bloomberg.com/
+
+# For Emacs forge:
+# See https://bbgithub.dev.bloomberg.com/gist/bspiers5/16fe995908e8e27af1684ab9fb803095
+
+# If you use bbgithub: links, this will allow forge to recognize the url
+[url "git@bbgithub.dev.bloomberg.com:"]
+    insteadOf = bbgithub:
+    pushInsteadOf = bbgithub:
+
+# Set the github variables for forge
+[github "bbgithub.dev.bloomberg.com/api"]
+	user = pgrenet
+    host = bbgithub.dev.bloomberg.com
+[github "bbgithub.dev.bloomberg.com/api/v3"]
+	user = pgrenet
+    host = bbgithub.dev.bloomberg.com
+[github]
+	user = pgrenet
+    host = bbgithub.dev.bloomberg.com/api/v3
+
+# If you use upstream as the name for the remote that you wish to do PRs to:
+[forge]
+    remote = upstream
+[pull]
+	rebase = false
+[init]
+	defaultBranch = main

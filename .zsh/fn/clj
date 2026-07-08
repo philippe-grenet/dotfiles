@@ -1,0 +1,13 @@
+#!/opt/local/bin/zsh
+
+# clj with fancy prompt
+# See https://asciinema.org/a/296507
+
+function clj() {
+    if [[ -z $@ ]]
+    then
+        command clojure -A:repl
+    else
+        command clj $@
+    fi
+}

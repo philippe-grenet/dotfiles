@@ -1,0 +1,39 @@
+#!/bin/zsh
+
+function last-reboot() {
+    # last reboot time formatted like May 16 16:42
+    last_reboot=$(/usr/bin/who -b | awk '{print $3 " " $4 " " $5}')
+
+    # Convert reboot time to epoch seconds
+    reboot_epoch=$(/bin/date -j -f "%b %d %H:%M" "$last_reboot" "+%s")
+
+    # Get current time in epoch seconds
+    current_epoch=$(date +%s)
+
+    # Calculate the difference in seconds
+    diff_seconds=$((current_epoch - reboot_epoch))
+
+    # Calculate days, hours, minutes
+    days=$((diff_seconds / 86400))
+    hours=$(((diff_seconds % 86400) / 3600))
+    minutes=$(((diff_seconds % 3600) / 60))
+
+    # 5 and 7 days in seconds
+    five_days=$((5 * 24 * 60 * 60))
+    seven_days=$((7 * 24 * 60 * 60))
+
+    BOLD_GREEN='\033[1;32m'
+    BOLD_ORANGE='\033[1;38;2;255;165;0m'  # bold + true orange
+    BOLD_RED='\033[1;31m'
+    NC='\033[0m'
+
+    if (( diff_seconds > seven_days )); then
+        COLOR=$BOLD_RED
+    elif (( diff_seconds > five_days )); then
+        COLOR=$BOLD_ORANGE
+    else
+        COLOR=$BOLD_GREEN
+    fi
+
+    echo "Last rebooted ${COLOR}${days} days, ${hours} hours, ${minutes} minutes${NC} ago"
+}

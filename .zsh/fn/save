@@ -1,0 +1,6 @@
+#!/opt/local/bin/zsh
+
+# Copy the argument file into ~/Scratch
+save() {
+    cp $1 ~/Scratch
+}

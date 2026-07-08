@@ -1,0 +1,14 @@
+#!/opt/local/bin/zsh
+
+# ssh from the mac to a dev machine
+ssh-dev() {
+    if [[ "$#" -ne 1 ]]
+    then
+        echo "usage: ssh-dev <machine> (ex: momdv-ob-001)"
+        return 1
+    fi
+
+    unixname=pgrenet
+    mach="$1"
+    ssh -Y -2 -t $unixname@v5devgateway.bdns.bloomberg.com inline $mach
+}

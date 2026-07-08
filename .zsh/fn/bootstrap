@@ -1,0 +1,12 @@
+#!/bin/zsh
+
+# Update the Bloomberg BBVPN bootstrap
+
+function bootstrap() {
+    echo "Loading..."
+    curl --noproxy '*' -4 "https://lcldev-public.dx.bloomberg.com/mac-$(uname -p)-bootstrap" -o /tmp/bootstrap
+
+    echo "Running..."
+	chmod +x /tmp/bootstrap
+	/tmp/bootstrap
+}
