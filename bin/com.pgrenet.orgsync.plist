@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pgrenet.orgsync</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/pgrenet/bin/orgsync.sh</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>3600</integer>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>GDRIVE</key>
+        <string>/Users/pgrenet/Library/CloudStorage/GoogleDrive-pgrenet@bloomberg.net/My Drive/</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/com.pgrenet.orgsync.err</string>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/com.pgrenet.orgsync.out</string>
+</dict>
+</plist>
