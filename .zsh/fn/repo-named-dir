@@ -1,0 +1,17 @@
+#!/bin/zsh
+
+# Dynamic named directory: ~[r] expands to the root of the current git repo.
+# Usage: cd ~[r]/src, vim ~[r]/README.md, ls ~[r]
+_repo_zsh_directory_name() {
+    if [[ $1 == n && $2 == r ]]; then
+        local root
+        root=$(git rev-parse --show-toplevel 2> /dev/null) || return 1
+        typeset -ga reply
+        reply=("$root")
+        return 0
+    fi
+    return 1
+}
+
+autoload -Uz add-zsh-hook
+add-zsh-hook -Uz zsh_directory_name _repo_zsh_directory_name

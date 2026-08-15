@@ -32,11 +32,10 @@ esac
 # Use emacs keybindings even if our EDITOR is set to vi
 bindkey -e
 
-export EMACS='/opt/homebrew/Cellar/emacs-mac@29/HEAD-47022e4/Emacs.app/Contents/MacOS/Emacs'
 case `uname` in
     Darwin)
-        export EDITOR="$EMACS -nw -Q"
-        export GIT_EDITOR="$EMACS -nw -Q"
+        export EDITOR="emacsclient -c"
+        export GIT_EDITOR="emacsclient -c"
         alias ez=$EMACS
         ;;
     Linux)
@@ -119,8 +118,9 @@ export TERM=xterm-256color
 #exec 2>>( while read X; do print "\e[91;1m${X}\e[0m" > /dev/tty; done & )
 
 # Grep in color
-export GREP_OPTIONS='--color=always'
-export GREP_COLOR='1;31'
+# Disabled because it confuses scripts like cc-setup
+#export GREP_OPTIONS='--color=always'
+#export GREP_COLOR='1;31'
 
 # GCC colors
 export GCC_COLORS='error=01;31:warning=01;33:note=01;36:caret=01;32:locus=01:quote=01'

@@ -1,0 +1,249 @@
+#!/bin/zsh
+
+# Interactively delete stale files: finds files under a directory that have not
+# been modified in the last N months (3 by default), lets you preview them and
+# pick the ones to remove with fzf, and moves the selection to the Trash.
+#
+# Ex: stale ~/Downloads          => candidates older than 3 months
+#     stale -m 6 ~/Downloads     => older than 6 months
+#     stale -d 1 ~/Downloads     => do not recurse into subdirectories
+#     stale -n ~/Downloads       => dry run: only list the candidates
+#
+# Run `stale --help` for the options, or press ? inside the picker for the
+# key bindings.
+#
+# Nothing is deleted without a final y/n confirmation, and files go to the
+# Trash (/usr/bin/trash), so a mistake is recoverable from the Finder.
+#
+# Directories pruned from the search default to .git, node_modules, .venv,
+# __pycache__ and .Trash; override with the STALE_PRUNE_DIRS array.
+
+function stale() {
+    local months=3 maxdepth="" dryrun=0 dir
+
+    # Single source for the key list: shown by --help and by ? in the picker.
+    local keys='  TAB      mark / unmark the file       C-a    mark every file
+  S-TAB    mark and move up             C-/    show or hide the preview
+  C-o      open in the default app      C-l    Quick Look
+  ENTER    trash the marked files       ESC    close this list, else abort
+  ?        show or hide this list'
+
+    while [[ "$1" == -* ]]; do
+        case "$1" in
+            -m|--months)   months="$2"; shift 2 ;;
+            -d|--maxdepth) maxdepth="$2"; shift 2 ;;
+            -n|--dry-run)  dryrun=1; shift ;;
+            -h|--help)
+                cat <<'USAGE'
+Usage: stale [-m MONTHS] [-d MAXDEPTH] [-n] [DIR]
+
+Finds files under DIR that have not been modified in the last MONTHS months,
+lets you preview and pick them, and moves the selection to the Trash. Nothing
+is deleted without a final confirmation.
+
+Options:
+  -m, --months MONTHS    age threshold, in months (default 3)
+  -d, --maxdepth DEPTH   limit recursion (1 = no subdirectories)
+  -n, --dry-run          list the candidates and stop
+  -h, --help             this message
+  DIR                    directory to scan (default: current)
+
+Keys in the picker:
+USAGE
+                print -r -- "$keys"
+                cat <<'USAGE'
+
+Environment:
+  STALE_PRUNE_DIRS       array of directory names to skip
+                         (default: .git node_modules .venv __pycache__ .Trash)
+USAGE
+                return 0 ;;
+            *) echo "stale: unknown option '$1'"; return 1 ;;
+        esac
+    done
+
+    dir="${1:-.}"
+    if [[ ! -d "$dir" ]]; then
+        echo "stale: '$dir' is not a directory"
+        return 1
+    fi
+    dir="${dir:A}"
+
+    if [[ ! "$months" =~ ^[0-9]+$ ]] || (( months < 1 )); then
+        echo "stale: --months must be a positive integer"
+        return 1
+    fi
+    if [[ -n "$maxdepth" && ! "$maxdepth" =~ ^[0-9]+$ ]]; then
+        echo "stale: --maxdepth must be a positive integer"
+        return 1
+    fi
+
+    local stamp raw list sel prev hlp flag
+    stamp=$(mktemp -t stale-stamp) || return 1
+    raw=$(mktemp -t stale-raw)     || return 1
+    list=$(mktemp -t stale-list)   || return 1
+    sel=$(mktemp -t stale-sel)     || return 1
+    prev=$(mktemp -t stale-prev)   || return 1
+    hlp=$(mktemp -t stale-help)    || return 1
+    flag="$hlp.on"                 # exists only while the help pane is up
+
+    # The always block at the end covers every normal exit, including return
+    # and errors. This covers Ctrl-C or a kill while the scan is running.
+    # local_options/local_traps keep both changes scoped to this function.
+    setopt local_options local_traps
+    trap 'rm -f "$stamp" "$raw" "$list" "$sel" "$prev" "$hlp" "$flag"; return 130' INT TERM HUP
+
+    {
+        # Cut-off date: a stamp file with the mtime we compare against.
+        touch -t "$(date -v-${months}m +%Y%m%d%H%M)" "$stamp" || return 1
+
+        # Build the find expression.
+        local -a find_args prunes
+        find_args=( "$dir" )
+        [[ -n "$maxdepth" ]] && find_args+=( -maxdepth "$maxdepth" )
+
+        if (( ${+STALE_PRUNE_DIRS} )); then
+            prunes=( "${STALE_PRUNE_DIRS[@]}" )
+        else
+            prunes=( .git node_modules .venv __pycache__ .Trash )
+        fi
+        if (( ${#prunes} )); then
+            local p
+            find_args+=( '(' )
+            for p in "${prunes[@]}"; do find_args+=( -name "$p" -o ); done
+            find_args[-1]=()            # drop the trailing -o
+            find_args+=( ')' -prune -o )
+        fi
+        find_args+=( -type f ! -name .DS_Store ! -newer "$stamp" -print0 )
+
+        # date <TAB> bytes <TAB> path, oldest first.
+        find "${find_args[@]}" 2>/dev/null \
+            | xargs -0 stat -f '%Sm%t%z%t%N' -t '%Y-%m-%d' 2>/dev/null \
+            | sort > "$raw"
+
+        if [[ ! -s "$raw" ]]; then
+            echo "stale: nothing older than $months month(s) in $dir"
+            return 0
+        fi
+
+        local count total
+        count=$(wc -l < "$raw" | tr -d ' ')
+        total=$(awk -F'\t' '{ s += $2 } END {
+                    split("B K M G T", u, " "); n = 1
+                    while (s >= 1024 && n < 5) { s /= 1024; n++ }
+                    fmt = (n == 1) ? "%d%s\n" : "%.1f%s\n"
+                    printf fmt, s, u[n]
+                }' "$raw")
+
+        # Same three fields, with the size made human readable and padded.
+        awk '{
+                 i = index($0, "\t"); d = substr($0, 1, i - 1); r = substr($0, i + 1)
+                 j = index(r, "\t");  b = substr(r, 1, j - 1) + 0; f = substr(r, j + 1)
+                 split("B K M G T", u, " "); n = 1
+                 while (b >= 1024 && n < 5) { b /= 1024; n++ }
+                 hs = (n == 1) ? sprintf("%d%s", b, u[n]) : sprintf("%.1f%s", b, u[n])
+                 printf "%s\t%7s\t%s\n", d, hs, f
+             }' "$raw" > "$list"
+
+        if (( dryrun )); then
+            echo "$count file(s), $total older than $months month(s) in $dir"
+            sed $'s/\t/  /g' "$list"
+            return 0
+        fi
+
+        # Preview script: fzf runs previews in a plain subshell, so it cannot
+        # see shell functions. Ship the logic as a throwaway script instead.
+        # The first two lines bake in the help paths; the rest is verbatim.
+        {
+            print -r -- "help_flag=${(q)flag}"
+            print -r -- "help_file=${(q)hlp}"
+            cat <<'PREVIEW'
+f=$1
+# While the help flag is set, the pane shows the key bindings instead of the
+# file, and keeps showing them as the cursor moves. ? or ESC clears the flag.
+[ -e "$help_flag" ] && { cat "$help_file"; exit 0; }
+[ -e "$f" ] || { echo "missing: $f"; exit 0; }
+printf '\033[1;36m%s\033[0m\n' "$f"
+stat -f 'modified %Sm    size %z bytes' -t '%Y-%m-%d %H:%M' "$f"
+echo '--------------------------------------------------------------'
+mime=$(file --mime-type -b "$f" 2>/dev/null)
+case "$mime" in
+    text/*|*json*|*xml*|*javascript*|*/x-sh|inode/x-empty)
+        bat --color=always --style=plain --line-range=:300 -- "$f" ;;
+    application/pdf)
+        pdftotext -l 3 -- "$f" - 2>/dev/null | head -100 ;;
+    image/*)
+        file -b -- "$f"
+        sips -g pixelWidth -g pixelHeight "$f" 2>/dev/null | tail -2
+        echo '(C-l for Quick Look)' ;;
+    application/zip|application/java-archive)
+        unzip -l -- "$f" 2>/dev/null | head -60 ;;
+    *gzip*|*x-tar*|*x-bzip2*|*x-xz*)
+        tar tf "$f" 2>/dev/null | head -60 || file -b -- "$f" ;;
+    *)
+        file -b -- "$f"
+        echo
+        xxd -l 512 -- "$f" 2>/dev/null | head -32 ;;
+esac
+PREVIEW
+        } > "$prev"
+
+        # In-picker help: ? sets a flag file that makes the preview script show
+        # the key list; ? or ESC clears it. ESC only aborts when help is closed.
+        {
+            printf '\033[1;36mstale — key bindings\033[0m\n\n'
+            print -r -- "$keys"
+            printf '\n\033[2m? or ESC to close\033[0m\n'
+        } > "$hlp"
+        rm -f "$flag"
+
+        fzf --multi \
+            --delimiter=$'\t' \
+            --preview="sh ${(q)prev} {3..}" \
+            --preview-window='right:55%:wrap' \
+            --header="$count file(s), $total  ·  older than $months month(s) in $dir  ·  ? for keys" \
+            --bind='ctrl-a:toggle-all' \
+            --bind='ctrl-/:toggle-preview' \
+            --bind='ctrl-o:execute-silent(open {3..})' \
+            --bind='ctrl-l:execute-silent(qlmanage -p {3..} >/dev/null 2>&1)' \
+            --bind="?:execute-silent(if [ -e ${(q)flag} ]; then rm -f ${(q)flag}; else : > ${(q)flag}; fi)+show-preview+refresh-preview" \
+            --bind="f1:execute-silent(if [ -e ${(q)flag} ]; then rm -f ${(q)flag}; else : > ${(q)flag}; fi)+show-preview+refresh-preview" \
+            --bind="esc:transform:if [ -e ${(q)flag} ]; then rm -f ${(q)flag}; echo refresh-preview; else echo abort; fi" \
+            < "$list" > "$sel"
+
+        if [[ ! -s "$sel" ]]; then
+            echo "stale: nothing selected"
+            return 0
+        fi
+
+        # Keep only the path (third field onwards) of each selected line.
+        local line f
+        local -a picked missing
+        while IFS= read -r line; do
+            f="${${line#*$'\t'}#*$'\t'}"
+            if [[ -e "$f" ]]; then picked+=( "$f" ); else missing+=( "$f" ); fi
+        done < "$sel"
+
+        if (( ${#missing} )); then
+            echo "stale: skipping ${#missing} unreadable path(s):"
+            printf '  %s\n' "${missing[@]}"
+        fi
+        if (( ! ${#picked} )); then
+            echo "stale: nothing to delete"
+            return 0
+        fi
+
+        echo "About to move to the Trash:"
+        printf '  %s\n' "${picked[@]}"
+        if read -q "REPLY?Move ${#picked} file(s) to the Trash? [y/N] "; then
+            echo
+            trash -v -s "${picked[@]}"
+        else
+            echo "\nAborting"
+            return 1
+        fi
+
+    } always {
+        rm -f "$stamp" "$raw" "$list" "$sel" "$prev" "$hlp" "$flag"
+    }
+}

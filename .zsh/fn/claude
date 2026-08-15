@@ -7,5 +7,7 @@ claude() {
         HOME="$HOME" \
         PATH="$PATH" \
         TERM="$TERM" \
+        EDITOR="$EDITOR" \
+        VISUAL="$EDITOR" \
         /opt/homebrew/bin/claude "$@"
 }
