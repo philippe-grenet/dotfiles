@@ -1,6 +1,8 @@
 # Philippe's .zshrc
 # The Unix shell: the crapiest programming language you'll ever see.
 
+local ATBB=$([[ "$HOST" == "K7MXD2YYHR" ]] && echo true || echo false)
+
 ################################################################################
 # Path
 ################################################################################
@@ -188,7 +190,7 @@ export GDRIVE="/Users/pgrenet/Library/CloudStorage/GoogleDrive-pgrenet@bloomberg
 ################################################################################
 
 export no_proxy="localhost,.bcs.bloomberg.com,.bdns.bloomberg.com,.inf.bloomberg.com,.dev.bloomberg.com,.dev.blpprofessional.com,.bcpc.bloomberg.com,bpv.bloomberg.com,127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.127.0.0/16,100.100.127.0/24,100.100.254.0/24,100.70.0.0/18,100.71.0.0/18"
-bbproxy on
+[[ "$ATBB" == true ]] && bbproxy on
 
 ################################################################################
 # Developer tools
@@ -288,6 +290,6 @@ fi
 export SDKMAN_DIR="$HOME/.sdkman"
 [[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]] && source "$HOME/.sdkman/bin/sdkman-init.sh"
 
-source ~/.lcldevrc
+[[ "$ATBB" == true ]] && source ~/.lcldevrc
 
-. "$HOME/.local/bin/env"
+[[ "$ATBB" == true ]] && . "$HOME/.local/bin/env"
