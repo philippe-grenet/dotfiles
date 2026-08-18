@@ -269,6 +269,55 @@ hs.hotkey.bind({"cmd", "alt", "ctrl"}, "W", minimizeAllVisible)
 hs.hotkey.bind({"shift", "cmd", "alt", "ctrl"}, "W", restoreLastBatch)
 
 
+--   ⌃⌥⌘F12  -> Org capture straight to the Inbox
+--   ⇧⌃⌥⌘F12 -> Org capture with the full template menu
+--
+-- Pops a small Emacs frame in the middle of the current screen.  The Emacs
+-- side lives in ~/.emacs.d/taps/org-mode/org-capture-frame.el.
+-- hs.task does not inherit the shell PATH, so this has to be an absolute path.
+local EMACSCLIENT = "/Applications/Emacs.app/Contents/MacOS/bin/emacsclient"
+
+local function currentScreenFrame()
+  local win = getTargetWindow()
+  local screen = (win and win:screen())
+      or hs.mouse.getCurrentScreen()
+      or hs.screen.mainScreen()
+  return screen:frame() -- excludes menu bar and dock
+end
+
+local function orgCapture(templateKey)
+  local emacs = hs.application.get("Emacs")
+  if not emacs then
+    hs.alert.show("Org capture: Emacs is not running", 4)
+    return
+  end
+
+  -- Emacs cannot tell which display we are looking at, so pass it the frame of
+  -- the screen holding the focused window and let it center itself in there.
+  local f = currentScreenFrame()
+  local elisp = string.format(
+    "(my/org-capture-frame %s %d %d %d %d)",
+    templateKey and string.format("%q", templateKey) or "nil",
+    f.x, f.y, f.w, f.h)
+  log.df("Org capture: %s", elisp)
+
+  hs.task.new(EMACSCLIENT, function(exitCode, stdout, stderr)
+    if exitCode ~= 0 then
+      local msg = ((stderr ~= "" and stderr) or stdout):gsub("%s+$", "")
+      log.ef("emacsclient failed (%d): %s", exitCode, msg)
+      hs.alert.show("Org capture failed:\n" .. msg, 6)
+    end
+  end, {"-e", elisp}):start()
+
+  -- The NS port only raises the new frame, it cannot activate Emacs itself, so
+  -- without this the keystrokes would keep going to the current application.
+  hs.timer.doAfter(0.15, function() emacs:activate() end)
+end
+
+hs.hotkey.bind({"cmd", "alt", "ctrl"}, "f12", function() orgCapture("i") end)
+hs.hotkey.bind({"shift", "cmd", "alt", "ctrl"}, "f12", function() orgCapture(nil) end)
+
+
 -- hs.loadSpoon("ToggleScreenRotation")
 -- spoon.ToggleScreenRotation:bindHotkeys( { ["BFP100-27"] = {{"cmd", "alt", "ctrl"}, "r" } } )
 

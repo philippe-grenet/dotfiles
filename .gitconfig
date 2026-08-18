@@ -19,7 +19,7 @@
     pager = delta
 
 [include]
-    path = ~/dot-files/delta-catppuccin.gitconfig
+    path = ~/dotfiles/delta-catppuccin.gitconfig
 
 [delta]
     features = catppuccin-mocha
@@ -117,6 +117,15 @@
 
 [credential]
 	helper = osxkeychain
+
+# See https://tutti.prod.bloomberg.com/open-source/open-source-best-practices/developer-environment
+[Credential "https://github.com"]
+    helper =
+    helper = !/opt/homebrew/bin/gh auth git-credential
+
+[credential "https://bbgithub.dev.bloomberg.com"]
+    helper =
+    helper = !/opt/homebrew/bin/gh auth git-credential
 
 [difftool "sourcetree"]
 	cmd = opendiff \"$LOCAL\" \"$REMOTE\"
