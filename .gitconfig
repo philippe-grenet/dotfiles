@@ -37,6 +37,11 @@
 	br = branch
 	co = checkout
     lg = log --abbrev-commit --decorate --format=format:'%C(bold blue)%h%C(reset) %C(bold green)(%ar)%C(reset) %s %C(dim white)- %an%C(reset)%C(bold yellow)%d%C(reset)'
+
+    # Same as lg, plus the files touched by each commit with +/- line counts.
+    # (`git lg --stat` also works: alias args are appended.)
+    lgs = log --abbrev-commit --decorate --stat --stat-graph-width=20 --format=format:'%C(bold blue)%h%C(reset) %C(bold green)(%ar)%C(reset) %s %C(dim white)- %an%C(reset)%C(bold yellow)%d%C(reset)'
+
 	Kompare = difftool -t kompare
 
     # Show the URL for the origin repo
