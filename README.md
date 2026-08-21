@@ -88,6 +88,7 @@ that directory is sourced at startup, one function per file.
 | `build`                           | cd to the CMake build directory of the current repo (`cmake.bld/$(uname)`)               |
 | `y`                               | Yazi wrapper that leaves the shell in the directory you exited from (`q` changes it, `Q` does not) |
 | `stale [-m N] [-d N] [-n] [dir]`  | Interactively trash files not modified in the last N months (3 by default), picked with fzf; `--help` for options, `?` in the picker for keys |
+| `mvdoc <file> <destination>`      | Move an org or Markdown file together with the images and diagrams it links to, rewriting the links that would otherwise break; shows a plan and asks before touching anything (`--help` for options) |
 | `backup <dir>`                    | Encrypt `<dir>` into `<dir>.enc` in the current directory (tar + AES-256)                |
 | `restore <dir>.enc`               | Restore an archive made by `backup`, refusing to overwrite an existing directory          |
 | `save <file>`                     | Copy `<file>` to `~/Scratch`                                                             |

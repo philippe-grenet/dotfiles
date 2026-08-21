@@ -1,9 +1,14 @@
 # -*- mode: sh -*-
 # Prompt for zsh
 # See https://scriptingosx.com/2019/07/moving-to-zsh-06-customizing-the-zsh-prompt/
+#
+# The prompt is assembled once per command by a precmd hook rather than by
+# command substitution inside $PROMPT. This keeps the number of forks per
+# prompt to a minimum: one `git rev-parse` plus, inside a repo, one
+# `git status`. Everything else is done with zsh builtins.
 
-setopt prompt_subst
 autoload -U colors && colors
+autoload -Uz add-zsh-hook
 
 # Colors for the Tomorrow Night theme
 # xterm-256color codes: https://jonasjacek.github.io/colors/
@@ -22,54 +27,101 @@ color_branch='246'    # Gray58
 color_modified='211'
 color_untracked='223'
 color_staged='116'
-color_host='183'       # Mauve
+color_host='183'      # Mauve
+color_ahead='216'     # Peach
 
-# Return a colored string containing the name of the git branch in parentheses, like (master).
+# Git state for the current directory, refreshed once per prompt by
+# prompt_git_gather(). An empty $git_root means "not in a repository".
+typeset -g git_root=''
+typeset -g git_head=''       # branch name, or "(detached)"
+typeset -g git_oid=''
+typeset -gi git_ahead=0      # commits ahead of upstream
+typeset -gi git_behind=0     # commits behind upstream
+typeset -gi git_staged=0
+typeset -gi git_untracked=0
+typeset -gi git_modified=0
+
+# Escape % so that repository, branch and directory names are never
+# interpreted as prompt escape sequences.
+quote_prompt() {
+    echo "${1//\%/%%}"
+}
+
+# Collect everything the prompt needs to know about the current repository.
+#
+# `git status --porcelain=v2 --branch` reports the branch, its upstream, the
+# ahead/behind counts and the per-file status in a single invocation, so this
+# replaces the separate rev-parse/status calls this prompt used to make. The
+# ahead/behind counts are a revwalk between two refs and cost well under a
+# millisecond; the worktree scan that `git status` performs anyway dominates.
+prompt_git_gather() {
+    git_root='' git_head='' git_oid=''
+    git_ahead=0 git_behind=0
+    git_staged=0 git_untracked=0 git_modified=0
+
+    git_root=$(git rev-parse --show-toplevel 2> /dev/null) || return
+
+    local -a lines=(${(f)"$(git status --porcelain=v2 --branch 2> /dev/null)"})
+    local line ab xy
+    for line in $lines; do
+        case $line in
+            '# branch.oid '*)  git_oid=${line#\# branch.oid } ;;
+            '# branch.head '*) git_head=${line#\# branch.head } ;;
+            '# branch.ab '*)
+                # Format is "+<ahead> -<behind>"; absent when there is no upstream.
+                ab=${line#\# branch.ab }
+                git_ahead=${${ab%% *}#+}
+                git_behind=${${ab##* }#-}
+                ;;
+            '#'*) ;;
+            # Ordinary, renamed and copied entries carry an XY status field:
+            # X is the index (staged) state, Y the worktree state, '.' is clean.
+            '1 '*|'2 '*)
+                xy=${line[3,4]}
+                [[ ${xy[1]} != '.' ]] && git_staged=1
+                [[ ${xy[2]} != '.' ]] && git_modified=1
+                ;;
+            'u '*) git_modified=1 ;;   # unmerged
+            '? '*) git_untracked=1 ;;
+            *) continue ;;
+        esac
+        # Nothing left to learn from the remaining file entries.
+        (( git_staged && git_untracked && git_modified )) && break
+    done
+}
+
+# Return a colored string containing the name of the git branch, like
+# "on  master", followed by the divergence from the upstream branch, like
+# "↑2" (2 commits ahead) or "↑2↓1" (diverged). Nothing is shown when the
+# branch is in sync with its upstream or has no upstream at all.
 git_branch() {
-    local BRANCH=$(git rev-parse --abbrev-ref HEAD 2> /dev/null | sed -e 's/\(.*\)/on  \1/g')
-    echo " %F{$color_branch}$BRANCH%f"
+    local name=$git_head
+    [[ $name == '(detached)' ]] && name=${git_oid[1,7]}
+
+    local divergence=''
+    (( git_ahead ))  && divergence+="↑$git_ahead"
+    (( git_behind )) && divergence+="↓$git_behind"
+    [[ -n $divergence ]] && divergence=" %F{$color_ahead}$divergence%f"
+
+    echo " %F{$color_branch}on  $(quote_prompt $name)%f$divergence"
 }
 
 # Return a colored string containing bullets of different colors indicating
 # staged/untracked/modified files in a git repo.
 git_status() {
-    # Populate flags with bullets of different colors for staged/untracked/modified files
-    local MODIFIED="%F{$color_modified}●%f"
-    local UNTRACKED="%F{$color_untracked}●%f"
-    local STAGED="%F{$color_staged}●%f"
-    local -a FLAGS
+    local -a flags
+    (( git_staged ))    && flags+=( "%F{$color_staged}●%f" )
+    (( git_untracked )) && flags+=( "%F{$color_untracked}●%f" )
+    (( git_modified ))  && flags+=( "%F{$color_modified}●%f" )
 
-    # Use git status --porcelain for optimal performance
-    # This is much faster than separate git diff/ls-files commands
-    local GIT_STATUS=$(git status --porcelain 2> /dev/null)
-
-    # Check for staged files (first column non-space: M, A, D, R, C)
-    if echo "$GIT_STATUS" | grep -q '^[MADRC]'; then
-        FLAGS+=( "$STAGED" )
-    fi
-
-    # Check for untracked files (??)
-    if echo "$GIT_STATUS" | grep -q '^??'; then
-        FLAGS+=( "$UNTRACKED" )
-    fi
-
-    # Check for modified files (second column M or D)
-    if echo "$GIT_STATUS" | grep -q '^.[MD]'; then
-        FLAGS+=( "$MODIFIED" )
-    fi
-
-    # Format flags to add a space if not empty
-    local -a STATUS
-    STATUS+=( "" )
-    [[ ${#FLAGS[@]} -ne 0 ]] && STATUS+=( "${(j::)FLAGS}" )
-    echo "${(j: :)STATUS}"
+    [[ ${#flags[@]} -eq 0 ]] && return
+    echo " ${(j::)flags}"
 }
 
 # If in a git repo, return git_branch() and git_status().
 # Otherwise return nothing.
 prompt_git_info() {
-    # Exit if not inside a Git repository
-    ! git rev-parse --is-inside-work-tree > /dev/null 2>&1 && return
+    [[ -z $git_root ]] && return
     echo "$(git_branch)$(git_status)"
 }
 
@@ -78,26 +130,25 @@ prompt_git_info() {
 # If in a git repo, the string starts at the root of the repo, highlighted in different color.
 prompt_path() {
     local PROMPT_PATH=""
-    local CURRENT=$(basename $PWD)
-    if [[ $CURRENT = / ]]; then
+    local CURRENT=$(quote_prompt ${PWD:t})
+    if [[ $PWD = / ]]; then
         # At /
         PROMPT_PATH="%F{$color_path}/%f"
     elif [[ $PWD = $HOME ]]; then
         # At ~
         PROMPT_PATH="%F{$color_path}~%f"
     else
-        local GIT_REPO_PATH=$(git rev-parse --show-toplevel 2>/dev/null)
-        if [[ -d $GIT_REPO_PATH ]]; then
+        if [[ -n $git_root ]]; then
             # Inside a git repo.
-            ROOT=$(basename $GIT_REPO_PATH)  # repo name
+            ROOT=$(quote_prompt ${git_root:t})  # repo name
 
-            if [[ $PWD -ef $GIT_REPO_PATH ]]; then
+            if [[ $PWD -ef $git_root ]]; then
                 # At the root of the repo.
                 PROMPT_PATH="%B%F{$color_repo}$ROOT%f%b"
             else
                 # Below the root of the repo.
-                REAL_PWD=$PWD:A
-                PATH_TO_CURRENT="${REAL_PWD#$GIT_REPO_PATH}"  # path from root, without root
+                REAL_PWD=${PWD:A}
+                PATH_TO_CURRENT="${REAL_PWD#$git_root}"       # path from root, without root
                 PATH_TO_CURRENT="${PATH_TO_CURRENT%/*}"       # remove last dir
 
                 if [[ -z "$PATH_TO_CURRENT" ]]; then
@@ -110,14 +161,16 @@ prompt_path() {
                     if [[ $LENGTH -gt 2 ]]; then
                         PATH_TO_CURRENT="/…/$DIRS[$LENGTH-1]/$DIRS[$LENGTH]"
                     fi
+                    PATH_TO_CURRENT=$(quote_prompt $PATH_TO_CURRENT)
                     PROMPT_PATH="%F{$color_repo}$ROOT%f%F{$color_path}$PATH_TO_CURRENT/%B$CURRENT%b%f"
                 fi
             fi
         else
             # Not in a git repo.
             # Note: this expression checks for 4 elements long: %(4~|true|false)
-            PATH_TO_CURRENT=$(print -P "%(4~|…/%3~|%~)")      # shortened pwd
+            PATH_TO_CURRENT=${(%):-"%(4~|…/%3~|%~)"}          # shortened pwd
             PATH_TO_CURRENT="${PATH_TO_CURRENT%/*}"           # remove last dir
+            PATH_TO_CURRENT=$(quote_prompt $PATH_TO_CURRENT)
             PROMPT_PATH="%F{$color_path}$PATH_TO_CURRENT/%B$CURRENT%b%f"
         fi
     fi
@@ -134,9 +187,15 @@ remote_hostname() {
     echo "$MACHINE"
 }
 
-export PROMPT=$'$(remote_hostname)$(prompt_path)$(prompt_git_info) %F{$color_path}❯ %f'
+# Assemble the prompt. Runs before every prompt is displayed.
+prompt_precmd() {
+    prompt_git_gather
+    PROMPT="$(remote_hostname)$(prompt_path)$(prompt_git_info) %F{$color_path}❯ %f"
+}
+add-zsh-hook precmd prompt_precmd
 
 # Simple/uncolored prompt for troubleshooting
 noprompt() {
-    export PROMPT='%2~ ❯ '
+    add-zsh-hook -d precmd prompt_precmd
+    PROMPT='%2~ ❯ '
 }

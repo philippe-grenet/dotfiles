@@ -1,0 +1,277 @@
+#!/bin/zsh
+
+# Move an org-mode or Markdown document to another place, taking the local
+# images and diagrams it links to along with it.
+#
+#   mvdoc architecture/calcrt-bql-convergence.org ~/Documents/org/calcrt
+#
+# Linked assets that live under the document's own directory are moved to the
+# same relative sub-path under the destination (img/foo.png stays img/foo.png),
+# so those links keep working untouched.  Links that cannot move (other
+# documents, files outside the document's directory) are rewritten so they still
+# resolve from the new location.  A plan is shown and confirmed before anything
+# is touched.
+#
+# `git mv` is used when the file is tracked and both ends live in the same
+# repository; --no-git forces plain `mv`.
+
+# Relative path from directory $2 to path $1; both absolute and normalized.
+_mvdoc_relpath() {
+    local -a t=(${(s:/:)1}) b=(${(s:/:)2}) out
+    local i=1 j
+    while (( i <= $#t && i <= $#b )) && [[ $t[i] == $b[i] ]]; do (( i++ )); done
+    for (( j = i; j <= $#b; j++ )); do out+=('..'); done
+    for (( j = i; j <= $#t; j++ )); do out+=($t[j]); done
+    (( $#out )) || out=('.')
+    print -r -- ${(j:/:)out}
+}
+
+# mv $1 to $2, through `git mv` when $3 is a repository tracking the file.
+_mvdoc_mv() {
+    if [[ -n $3 ]] && git -C $3 ls-files --error-unmatch -- $1 >/dev/null 2>&1; then
+        git -C $3 mv -- $1 $2
+    else
+        mv -- $1 $2
+    fi
+}
+
+function mvdoc() {
+    emulate -L zsh
+    setopt local_options extended_glob
+    zmodload -F zsh/mapfile p:mapfile
+
+    local -a o_nogit o_yes o_dry o_help
+    zparseopts -D -F -- -no-git=o_nogit y=o_yes -yes=o_yes n=o_dry -dry-run=o_dry \
+                        h=o_help -help=o_help || return 1
+
+    if (( $#o_help )) || (( $# != 2 )); then
+        print -r -- "Usage: mvdoc [options] <file.org|file.md> <destination>"
+        print -r -- ""
+        print -r -- "Move an org or Markdown file plus the images and diagrams it links to."
+        print -r -- "<destination> is a directory to move into, created if needed, or a new"
+        print -r -- ".org/.md path to move and rename in one go."
+        print -r -- ""
+        print -r -- "  --no-git       use plain mv even inside a git repository"
+        print -r -- "  -n, --dry-run  show the plan and stop"
+        print -r -- "  -y, --yes      do not ask for confirmation"
+        print -r -- "  -h, --help     this message"
+        (( $#o_help )) && return 0 || return 1
+    fi
+
+    # Extensions treated as assets to carry along with the document.
+    local -a asset_ext=(png jpg jpeg gif svg webp bmp tif tiff pdf puml plantuml
+                        drawio excalidraw mmd dot gv)
+
+    #-------------------------------------------------------------------- source
+    local src=${1:a}
+    [[ -f $src ]] || { print -u2 -r -- "mvdoc: $1: no such file"; return 1 }
+    case ${src:e:l} in
+        org|md|markdown) ;;
+        *) print -u2 -r -- "mvdoc: ${src:t}: not an org or Markdown file"; return 1 ;;
+    esac
+    local srcdir=${src:h}
+
+    #--------------------------------------------------------------- destination
+    # A destination is a directory unless it is named like a document, so that a
+    # not-yet-existing "…/calcrt" is a directory to create, not a new file name.
+    local dst
+    if [[ ${2:e:l} == (org|md|markdown) && ! -d $2 ]]; then
+        dst=${2:a}
+    else
+        dst=${${2%/}:a}/${src:t}
+    fi
+    local dstdir=${dst:h}
+    [[ $dst == $src ]] && { print -u2 -r -- "mvdoc: source and destination are the same"; return 1 }
+    [[ -e $dst ]] && { print -u2 -r -- "mvdoc: $dst already exists"; return 1 }
+
+    #---------------------------------------------------------------------- git
+    local repo='' probe=$dstdir
+    while [[ ! -d $probe && $probe != / ]]; do probe=${probe:h}; done
+    if (( ! $#o_nogit )); then
+        local srcrepo=$(git -C $srcdir rev-parse --show-toplevel 2>/dev/null)
+        local dstrepo=$(git -C $probe rev-parse --show-toplevel 2>/dev/null)
+        [[ -n $srcrepo && $srcrepo == $dstrepo ]] && repo=$srcrepo
+    fi
+
+    #-------------------------------------------------------------------- links
+    # Extract the link targets, as they are written in the file.
+    local -a tokens
+    local wrap_l wrap_r
+    if [[ ${src:e:l} == org ]]; then
+        wrap_l='[[' wrap_r=']'
+        tokens=( ${${${(f)"$(grep -oE '\[\[[^]]+\]' -- $src)"}#\[\[}%\]} )
+    else
+        wrap_l='](' wrap_r=')'
+        tokens=( ${${${(f)"$(grep -oE '\]\([^)]+\)' -- $src)"}#\]\(}%\)} )
+    fi
+
+    local -A target       # link as written -> absolute path it points to
+    local -A kind         # absolute path   -> move | keep | missing
+    local -A dest         # absolute path   -> where it ends up
+    local link tgt i
+
+    for link in $tokens; do
+        [[ -z $link || -n ${target[$link]} ]] && continue
+        tgt=${link#file:}
+        tgt=${tgt%%::*}                       # org search suffix
+        tgt=${tgt%%\#*}                       # anchor
+        [[ -z $tgt ]] && continue
+        [[ $tgt == (\*|/*/)* ]] && continue   # internal heading target
+        [[ $tgt == [a-zA-Z][a-zA-Z0-9+.-]#:* ]] && continue    # url or other scheme
+        [[ $tgt == '~/'* ]] && tgt=$HOME/${tgt#\~/}
+        [[ $tgt == /* ]] || tgt=$srcdir/$tgt
+        tgt=${tgt:a}
+        [[ $tgt == $src ]] && continue        # self reference
+        target[$link]=$tgt
+
+        [[ -n ${kind[$tgt]} ]] && continue
+        if [[ ! -e $tgt ]]; then
+            kind[$tgt]=missing
+            dest[$tgt]=$tgt
+        elif [[ -f $tgt && $tgt == $srcdir/* && ${asset_ext[(r)${tgt:e:l}]} != '' ]]; then
+            kind[$tgt]=move
+            dest[$tgt]=$dstdir/${tgt#$srcdir/}
+        else
+            kind[$tgt]=keep
+            dest[$tgt]=$tgt
+        fi
+    done
+
+    #------------------------------------------------- rewrites and conflicts
+    local -a rw_old rw_new conflicts
+    local new abs
+
+    for link in ${(k)target}; do
+        abs=${target[$link]}
+        [[ ${kind[$abs]} == missing ]] && continue
+        # Rebuild the link the way it was written, pointing at the new location.
+        tgt=${link#file:}
+        local prefix='' suffix='' body=$tgt
+        [[ $link == file:* ]] && prefix=file:
+        [[ $tgt == *::* ]] && { suffix=::${tgt#*::}; body=${tgt%%::*} }
+        [[ $body == *\#* ]] && { suffix=\#${body#*\#}$suffix; body=${body%%\#*} }
+        if [[ $body == /* ]]; then
+            new=${dest[$abs]}
+        elif [[ $body == '~/'* ]]; then
+            new=${dest[$abs]}
+            [[ $new == $HOME/* ]] && new=\~/${new#$HOME/}
+        else
+            new=$(_mvdoc_relpath ${dest[$abs]} $dstdir)
+            [[ $body == ./* && $new != (.|..)/* ]] && new=./$new
+        fi
+        new=$prefix$new$suffix
+        [[ $new == $link ]] && continue
+        rw_old+=($wrap_l$link$wrap_r)
+        rw_new+=($wrap_l$new$wrap_r)
+    done
+
+    local -a assets=( ${(k)kind[(R)move]} )
+    assets=( ${(o)assets} )
+    for abs in $assets; do
+        [[ -e ${dest[$abs]} ]] && conflicts+=(${dest[$abs]})
+    done
+    if (( $#conflicts )); then
+        print -u2 -r -- "mvdoc: destination already has these files:"
+        print -u2 -rl -- "  ${^conflicts}"
+        return 1
+    fi
+
+    #---------------------------------------------------- who else refers to it
+    # Only a warning: links in other documents are not rewritten.
+    local searchroot=${repo:-$(git -C $srcdir rev-parse --show-toplevel 2>/dev/null)}
+    searchroot=${searchroot:-$srcdir}
+    local -A shared       # moved path -> newline separated list of documents linking it
+    local -a others hits
+    local other
+    for abs in $assets ${src}; do
+        others=( ${(f)"$(grep -rlF --include='*.org' --include='*.md' --exclude-dir=.git \
+                          -- ${abs:t} $searchroot 2>/dev/null)"} )
+        hits=()
+        for other in ${others:#}; do
+            [[ ${other:A} == ${src:A} ]] || hits+=(${other#$searchroot/})
+        done
+        (( $#hits )) && shared[$abs]=${(pj:\n:)${(o)hits}}
+    done
+
+    #--------------------------------------------------------------------- plan
+    local bold='' plain=''
+    [[ -t 1 ]] && { bold=$'\e[1m' plain=$'\e[0m' }
+
+    local how=mv
+    [[ -n $repo ]] && git -C $repo ls-files --error-unmatch -- $src >/dev/null 2>&1 && how='git mv'
+    print -r -- "Document (${bold}${how}${plain}):"
+    print -r -- "  $src"
+    print -r -- "  → $dst"
+    local -a linkers
+    if [[ -n ${shared[$src]} ]]; then
+        linkers=( ${(f)shared[$src]} )
+        print -r -- "  ${bold}! $#linkers other document(s) link to it; their links are not updated:${plain}"
+        print -rl -- ${linkers/#/      }
+    fi
+
+    if (( $#assets )); then
+        print -r -- ""
+        print -r -- "Assets ($#assets):"
+        for abs in $assets; do
+            print -r -- "  ${abs#$srcdir/} → $(_mvdoc_relpath ${dest[$abs]} $dstdir)"
+            if [[ -n ${shared[$abs]} ]]; then
+                linkers=( ${(f)shared[$abs]} )
+                print -r -- "    ${bold}! also linked from $#linkers other document(s):${plain}"
+                print -rl -- ${linkers/#/        }
+            fi
+        done
+    fi
+
+    local -a missing=( ${(ok)kind[(R)missing]} )
+    if (( $#missing )); then
+        print -r -- ""
+        print -r -- "Broken links, left alone ($#missing):"
+        print -rl -- "  ${^missing}"
+    fi
+
+    if (( $#rw_old )); then
+        print -r -- ""
+        print -r -- "Links rewritten in the moved document ($#rw_old):"
+        for i in {1..$#rw_old}; do
+            print -r -- "  $rw_old[$i] → $rw_new[$i]"
+        done
+    fi
+
+    [[ -d $dstdir ]] || { print -r -- ""; print -r -- "Directory created: $dstdir" }
+
+    (( $#o_dry )) && return 0
+    if (( ! $#o_yes )); then
+        local reply
+        print -r -- ""
+        read -r "reply?Proceed? [Y/n] "
+        [[ -z $reply || $reply == [yY]* ]] || { print -r -- "Aborted."; return 1 }
+    fi
+
+    #------------------------------------------------------------------ execute
+    mkdir -p -- $dstdir || return 1
+    _mvdoc_mv $src $dst $repo || return 1
+
+    local -A pruned
+    for abs in $assets; do
+        mkdir -p -- ${dest[$abs]:h} || return 1
+        _mvdoc_mv $abs ${dest[$abs]} $repo || return 1
+        pruned[${abs:h}]=1
+    done
+
+    # Rewrite the links that moved with the document.
+    if (( $#rw_old )); then
+        local content=$mapfile[$dst]
+        for i in {1..$#rw_old}; do
+            content=${content//"$rw_old[$i]"/$rw_new[$i]}
+        done
+        mapfile[$dst]=$content
+    fi
+
+    # Tidy up asset directories left empty behind us.
+    for abs in ${(k)pruned}; do
+        [[ $abs == $srcdir ]] && continue
+        rmdir -- $abs 2>/dev/null && print -r -- "Removed empty directory $abs"
+    done
+
+    print -r -- "Moved ${src:t} to $dstdir$( (( $#assets )) && print -n -- " with $#assets asset(s)")."
+}
