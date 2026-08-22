@@ -183,7 +183,8 @@ case `uname` in
 esac
 
 # Files location in Google drive
-export GDRIVE="/Users/pgrenet/Library/CloudStorage/GoogleDrive-pgrenet@bloomberg.net/My Drive/"
+[[ "$ATBB" == true ]] && export GDRIVE="/Users/pgrenet/Library/CloudStorage/GoogleDrive-pgrenet@bloomberg.net/My Drive/"
+[[ "$ATBB" == true ]] && export ORG_REPO_DIR="/Users/pgrenet/Documents/org"
 
 ################################################################################
 # Proxies
