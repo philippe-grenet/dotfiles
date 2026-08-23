@@ -60,14 +60,16 @@ bindkey "^X^E" edit-command-line
 HISTSIZE=10000
 SAVEHIST=10000
 HISTFILE=~/.zsh_history
-# APPEND_HISTORY -> zsh sessions will append their history list to the history
-# file, rather than replace it. Thus, multiple parallel zsh sessions will all
-# have the new entries from their history lists added to the history file, in
-# the order that they exit. The file will still be periodically re-written to
-# trim it when the number of lines grows 20% beyond the value specified by
-# $SAVEHIST (see also the HIST SAVE BY COPY option).
-setopt APPEND_HISTORY
-#setopt histignorealldups sharehistory
+# SHARE_HISTORY -> commands are written to the history file immediately and
+# re-imported from it before each prompt, so all running shells share a single
+# history. Implies INC_APPEND_HISTORY (and supersedes APPEND_HISTORY, which only
+# flushed each session's list at exit).
+setopt SHARE_HISTORY
+setopt EXTENDED_HISTORY      # timestamps; needed to interleave sessions correctly
+setopt HIST_IGNORE_ALL_DUPS  # drop older duplicates of a repeated command
+setopt HIST_IGNORE_SPACE     # leading space keeps a command out of history
+setopt HIST_REDUCE_BLANKS
+setopt HIST_VERIFY           # expand !! into the line instead of running it blind
 
 # ZLE emacs-like key bindings (meta arrow)
 bindkey "^[[5D" backward-word
