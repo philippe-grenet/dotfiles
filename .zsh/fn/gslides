@@ -1,0 +1,209 @@
+#!/bin/zsh
+
+# Import a Google Slides deck into the org notes intake directory, as Markdown.
+#
+#   gslides https://docs.google.com/presentation/d/1MVhq9fF.../edit
+#   gslides "$GDRIVE/Misc/How DMP conquered the Terminal.gslides"
+#   gslides -r "$GDRIVE/Scratch/Data Tier discussion.gslides"
+#
+# `gdoc` exports a deck as PDF, which preserves the layout but leaves the
+# content unsearchable.  This exports .pptx instead and turns it into one
+# Markdown section per slide, because the deck's substance is usually in the
+# speaker notes rather than on the slides -- and a PDF hides both.
+#
+# pandoc reads .pptx but numbers the slides "Slide 1, Slide 2…" and drops the
+# speaker notes on the floor, so `bin/pptx2md.py` reads the .pptx a second time
+# to put the real titles and the notes back.  Images placed on the slides come
+# out of the .pptx too, into <slug>-img/.
+#
+# Diagrams drawn with native shapes -- boxes and arrows, rather than a pasted
+# image -- exist nowhere in the .pptx as a picture, so they survive only as
+# loose labels.  With -r the deck is also exported as PDF and rendered to one
+# PNG per slide, which is the only way to keep those.  That costs a second
+# browser download.
+#
+#   default   one download:  text + speaker notes + images placed on slides
+#   -r        two downloads: the above, plus a rendered PNG of every slide
+#   -p        keep the PDF as well (implies -r)
+#
+# Only the path of the note is printed on stdout, so the function composes.
+# Resolution and downloading are shared with `gdoc`.
+
+function gslides() {
+    emulate -L zsh
+    setopt local_options extended_glob
+    zmodload -F zsh/mapfile p:mapfile
+
+    local -a o_out o_dpi o_time o_render o_pdf o_keep o_force o_dry o_help
+    zparseopts -D -F -- o:=o_out -out:=o_out d:=o_dpi -dpi:=o_dpi \
+                        t:=o_time -timeout:=o_time r=o_render -render=o_render \
+                        p=o_pdf -pdf=o_pdf k=o_keep -keep=o_keep \
+                        F=o_force -force=o_force n=o_dry -dry-run=o_dry \
+                        h=o_help -help=o_help || return 1
+
+    if (( $#o_help )) || (( $# != 1 )); then
+        print -r -- "Usage: gslides [options] <url | \$GDRIVE path | doc-id>"
+        print -r -- ""
+        print -r -- "Export a Google Slides deck and file it into intake/ as Markdown,"
+        print -r -- "one section per slide, with the speaker notes."
+        print -r -- ""
+        print -r -- "  -o, --out DIR      destination directory (default: <org>/intake)"
+        print -r -- "  -r, --render       also render one PNG per slide (second download)"
+        print -r -- "  -p, --pdf          keep the PDF too (implies -r)"
+        print -r -- "  -d, --dpi N        resolution for -r (default: 110)"
+        print -r -- "  -t, --timeout SEC  how long to wait for a download (default: 90)"
+        print -r -- "  -k, --keep         keep the raw exports in ~/Downloads"
+        print -r -- "  -F, --force        overwrite an existing destination file"
+        print -r -- "  -n, --dry-run      resolve and show the plan, download nothing"
+        print -r -- "  -h, --help         this message"
+        (( $#o_help )) && return 0 || return 1
+    fi
+
+    local arg=$1
+    local orgdir=${ORG_REPO_DIR:-$HOME/Documents/org}
+    local outdir=${${o_out[2]:-$orgdir/intake}%/}
+    local timeout=${o_time[2]:-90}
+    local dpi=${o_dpi[2]:-110}
+    local helper=${GSLIDES_PPTX2MD:-$HOME/dotfiles/bin/pptx2md.py}
+
+    (( $#o_pdf )) && o_render=(-r)
+
+    (( $+commands[pandoc] )) || { _gdoc_say "gslides: pandoc is not installed"; return 1 }
+    (( $+commands[python3] )) || { _gdoc_say "gslides: python3 is not installed"; return 1 }
+    [[ -r $helper ]] || { _gdoc_say "gslides: cannot read $helper"; return 1 }
+    if (( $#o_render )) && (( ! $+commands[pdftoppm] )); then
+        _gdoc_say "gslides: -r needs pdftoppm (brew install poppler)"
+        return 1
+    fi
+
+    #----------------------------------------------------------------- resolve
+    local line
+    line=$(_gdoc_resolve $arg gslides) || return 1
+    local kind=${line%%$'\t'*}
+    local id=${${line#*$'\t'}%%$'\t'*}
+
+    if [[ $kind != presentation ]]; then
+        _gdoc_say "gslides: that is a Google $kind, not a presentation — use gdoc"
+        return 1
+    fi
+
+    local base="https://docs.google.com/presentation/d/$id"
+    _gdoc_say "Id:       $id"
+    _gdoc_say "Export:   $base/export/pptx"
+    (( $#o_render )) && _gdoc_say "Render:   $base/export/pdf at ${dpi}dpi"
+    _gdoc_say "Into:     $outdir"
+    if (( $#o_dry )); then
+        _gdoc_say ""
+        _gdoc_say "Dry run: nothing downloaded."
+        return 0
+    fi
+
+    #---------------------------------------------------------------- download
+    _gdoc_say ""
+    local pptx
+    pptx=$(_gdoc_download "$base/export/pptx" pptx $timeout gslides) || return 1
+
+    local title=${pptx:t:r}
+    title=${title%% \(<->\)}                # drop the browser's " (1)" suffix
+    local slug=$(_gdoc_slug $title)
+    [[ -n $slug ]] || slug=$id
+
+    local out=$outdir/$slug.md
+    local imgdir=$outdir/$slug-img
+    local pdfout=''
+    (( $#o_pdf )) && pdfout=$outdir/$slug.pdf
+
+    if (( ! $#o_force )); then
+        local clash
+        for clash in $out $pdfout; do
+            [[ -n $clash && -e $clash ]] && {
+                _gdoc_say "gslides: $clash already exists (use -F to overwrite)"
+                return 1
+            }
+        done
+    fi
+    mkdir -p -- $outdir || return 1
+
+    # The rendered pages, when asked for.  Downloaded before the conversion so
+    # that a failure here costs nothing that has already been written out.
+    local pdf=''
+    if (( $#o_render )); then
+        pdf=$(_gdoc_download "$base/export/pdf" pdf $timeout gslides) || return 1
+        mkdir -p -- $imgdir || return 1
+        pdftoppm -png -r $dpi -- $pdf $imgdir/slide || {
+            _gdoc_say "gslides: pdftoppm failed on ${pdf:t}"
+            return 1
+        }
+        _gdoc_say "Rendered: $(print -rl -- $imgdir/slide-*.png(N.) | wc -l | tr -d ' ') slide image(s)"
+    fi
+
+    #----------------------------------------------------------------- convert
+    local media=.gslides-media-$$
+    local body=$outdir/.gslides-$$.md
+    ( cd -- $outdir && pandoc -f pptx -t gfm --wrap=none \
+          --extract-media=$media -o ${body:t} -- $pptx ) || {
+        _gdoc_say "gslides: pandoc failed to convert ${pptx:t}"
+        rm -rf -- $body $outdir/$media
+        return 1
+    }
+
+    # pandoc drops pptx media at <dir>/ppt/media/, unlike the <dir>/media/ it
+    # uses for a .docx; either way they belong next to the note.
+    local -a extracted=( $outdir/$media/**/*(N.) )
+    if (( $#extracted )); then
+        mkdir -p -- $imgdir || return 1
+        mv -- $extracted $imgdir/
+    fi
+    rm -rf -- $outdir/$media
+
+    local merged
+    merged=$( cd -- $outdir && python3 $helper $pptx ${body:t} \
+                  ${o_render:+--slide-images} ${o_render:+$slug-img} ) || {
+        _gdoc_say "gslides: could not merge the speaker notes back in"
+        rm -f -- $body
+        return 1
+    }
+    rm -f -- $body
+
+    # Point the extracted images at where they actually ended up.  The pattern
+    # has to come from a variable: quoting does not stop zsh from reading the
+    # first "/" in "${x//a/b/c}" as the end of the pattern.
+    local from to=$slug-img/
+    for from in $media/ppt/media/ $media/media/; do
+        merged=${merged//$from/$to}
+    done
+
+    local slides=$(print -r -- $merged | grep -c '^## ')
+    mapfile[$out]="---
+source: $base/edit
+title: \"${title//\"/\'}\"
+captured: $(date +%F)
+slides: $slides
+---
+
+# $title
+
+$merged"
+
+    [[ -n $pdfout ]] && { mv -- $pdf $pdfout || return 1 }
+
+    #-------------------------------------------------------------------- tidy
+    local f
+    for f in $pptx $pdf; do
+        [[ -n $f && -e $f ]] || continue
+        if (( $#o_keep )); then
+            _gdoc_say "Kept the raw export at $f"
+        else
+            rm -f -- $f
+        fi
+    done
+
+    local -a images=( $imgdir/*(N.) )
+    _gdoc_say ""
+    _gdoc_say "Wrote ${out:t} — $slides slide(s)\
+$( (( $#images )) && print -n -- ", $#images image(s) in ${imgdir:t}/")\
+$( [[ -n $pdfout ]] && print -n -- ", ${pdfout:t}")"
+    _gdoc_say "Run /intake to file it."
+
+    print -r -- $out
+}

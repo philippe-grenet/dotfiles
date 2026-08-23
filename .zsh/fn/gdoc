@@ -1,0 +1,342 @@
+#!/bin/zsh
+
+# Import a Google Drive document into the org notes intake directory.
+#
+#   gdoc https://docs.google.com/document/d/19z8CYlwRckzN5x.../edit
+#   gdoc "$GDRIVE/Scratch/Coding Style.gdoc"
+#   gdoc 19z8CYlwRckzN5x_V9Y4abl6TJh4N2C0Rl-i84scpRj4
+#
+# Google's own Markdown export is broken: bullets come out as literal middle
+# dots, headings as bold paragraphs, and the whole text is over-escaped.  Its
+# HTML export encodes bold and italic as CSS classes, which pandoc cannot see,
+# so emphasis is lost there instead.  Documents are therefore exported as .docx
+# and converted with pandoc, which keeps headings, emphasis, tables, nested
+# lists and images.
+#
+# SSO blocks rclone and the Drive API, so the export is fetched the only way
+# that needs no credentials: `open` hands the export URL to the browser, which
+# is already signed in, and the file lands in ~/Downloads.  This function waits
+# for it, converts it, and writes the result into intake/ with the source URL
+# in the frontmatter so the note can always be traced back.
+#
+#   Docs        -> .docx -> Markdown
+#   Sheets      -> .csv  -> Markdown table (first tab; -g picks another)
+#   Slides      -> .pdf, plus a Markdown stub to write the summary in
+#   Drive files -> downloaded as-is, plus a Markdown stub
+#
+# Only the path of the file to read is printed on stdout; everything else goes
+# to stderr, so `gdoc <url>` can be used from a script or by Claude.
+
+# Diagnostics, kept off stdout.
+_gdoc_say() { print -u2 -r -- "$@" }
+
+# Lowercase kebab-case slug from an arbitrary document title.
+_gdoc_slug() {
+    emulate -L zsh
+    local s=${1:l}
+    s=${s//[^a-z0-9]/-}     # anything exotic becomes a separator
+    while [[ $s == *--* ]]; do s=${s//--/-}; done
+    print -r -- ${${s#-}%-}
+}
+
+# Wait for the browser to drop a new $2 file into $1, print its path.
+_gdoc_wait() {
+    emulate -L zsh
+    setopt local_options
+    local dldir=$1 want=$2 timeout=$3
+    shift 3
+    local -A seen
+    local f
+    for f in "${@}"; do seen[$f]=1; done
+
+    local found='' deadline=$(( SECONDS + timeout ))
+    while (( SECONDS < deadline )); do
+        for f in $dldir/*(N.om); do
+            [[ -n ${seen[$f]} ]] && continue
+            # Partial downloads: Chrome writes .crdownload, Firefox .part.
+            [[ ${f:e:l} == (crdownload|part|tmp) ]] && continue
+            [[ -n $want && ${f:e:l} != ${want:l} ]] && continue
+            found=$f
+            break
+        done
+        [[ -n $found ]] && break
+        sleep 0.3
+    done
+    [[ -z $found ]] && return 1
+
+    # The name appears before the bytes do; wait for the size to settle.
+    local s1 s2=''
+    repeat 100; do
+        s1=$(stat -f %z -- $found 2>/dev/null) || return 1
+        [[ $s1 == $s2 && $s1 != 0 ]] && break
+        s2=$s1
+        sleep 0.4
+    done
+    print -r -- $found
+}
+
+# Resolve a Google target $1 to "kind<TAB>id<TAB>gid", where kind is one of
+# document, spreadsheet, presentation, drawing or file.  Accepts a browser URL,
+# a Drive-for-Desktop stub file, or a bare document id.  $2 names the calling
+# function, for the error messages.  Shared with `gslides`.
+_gdoc_resolve() {
+    emulate -L zsh
+    setopt local_options extended_glob
+    local arg=$1 me=${2:-gdoc} id='' kind='' gid=''
+
+    if [[ -f $arg ]]; then
+        (( $+commands[jq] )) || { _gdoc_say "$me: jq is needed to read $arg"; return 1 }
+        case ${arg:e:l} in
+            gdoc)    kind=document ;;
+            gsheet)  kind=spreadsheet ;;
+            gslides) kind=presentation ;;
+            gdraw)   kind=drawing ;;
+            *) _gdoc_say "$me: ${arg:t}: not a Google Drive stub file"; return 1 ;;
+        esac
+        # Newer stubs carry doc_id; older ones only a url to pick the id out of.
+        id=$(jq -r '.doc_id // .resource_id // .url // empty' -- $arg 2>/dev/null)
+        [[ $id == *//* ]] && id=${${id#*/d/}%%/*}
+    elif [[ $arg == (http|https)://* ]]; then
+        case $arg in
+            *docs.google.com/document/d/*)     kind=document ;;
+            *docs.google.com/spreadsheets/d/*) kind=spreadsheet ;;
+            *docs.google.com/presentation/d/*) kind=presentation ;;
+            *docs.google.com/drawings/d/*)     kind=drawing ;;
+            *drive.google.com/file/d/*)        kind=file ;;
+            *drive.google.com/*id=*)           kind=file ;;
+            *) _gdoc_say "$me: unrecognized Google URL: $arg"; return 1 ;;
+        esac
+        # Only the drive.google.com form carries the id in the query string;
+        # elsewhere `id=` would happily match the `gid=` of a sheet tab.
+        if [[ $kind == file && $arg == *[?\&]id=* ]]; then
+            id=${${arg#*[?&]id=}%%[&\#]*}
+        else
+            id=${${arg#*/d/}%%[/?\#]*}
+        fi
+        [[ $kind == spreadsheet && $arg == *gid=* ]] && gid=${${arg#*gid=}%%[&\#]*}
+    elif [[ $arg == [a-zA-Z0-9_-](#c20,) ]]; then
+        kind=document
+        id=$arg
+        _gdoc_say "$me: bare id, assuming a Google Doc (paste the URL for other types)"
+    else
+        _gdoc_say "$me: $arg: not a URL, a Drive stub file, or a document id"
+        return 1
+    fi
+
+    [[ -n $id ]] || { _gdoc_say "$me: could not work out the document id"; return 1 }
+    print -r -- "$kind"$'\t'"$id"$'\t'"$gid"
+}
+
+# Hand $1 to the browser, wait for a $2 file to land in ~/Downloads, print its
+# path.  $3 is the timeout in seconds, $4 names the calling function.
+_gdoc_download() {
+    emulate -L zsh
+    setopt local_options
+    local url=$1 want=$2 timeout=$3 me=${4:-gdoc}
+    local dldir=${GDOC_DOWNLOADS:-$HOME/Downloads}
+    [[ -d $dldir ]] || { _gdoc_say "$me: no download directory at $dldir"; return 1 }
+
+    local -a before=( $dldir/*(N.) )
+    _gdoc_say "Opening the browser; waiting up to ${timeout}s for the ${want:-file} export..."
+    open -- $url || { _gdoc_say "$me: could not open $url"; return 1 }
+
+    local dl
+    dl=$(_gdoc_wait $dldir "$want" $timeout "${before[@]}") || {
+        _gdoc_say "$me: no ${want:-new} file appeared in $dldir."
+        _gdoc_say "      Check the browser: the export may need a sign-in, or the"
+        _gdoc_say "      document may not be shared with you."
+        return 1
+    }
+    _gdoc_say "Downloaded: ${dl:t}"
+    print -r -- $dl
+}
+
+function gdoc() {
+    emulate -L zsh
+    setopt local_options extended_glob
+    zmodload -F zsh/mapfile p:mapfile
+
+    local -a o_fmt o_out o_gid o_time o_keep o_force o_dry o_help
+    zparseopts -D -F -- f:=o_fmt -format:=o_fmt o:=o_out -out:=o_out \
+                        g:=o_gid -gid:=o_gid t:=o_time -timeout:=o_time \
+                        k=o_keep -keep=o_keep F=o_force -force=o_force \
+                        n=o_dry -dry-run=o_dry h=o_help -help=o_help || return 1
+
+    if (( $#o_help )) || (( $# != 1 )); then
+        print -r -- "Usage: gdoc [options] <url | \$GDRIVE path | doc-id>"
+        print -r -- ""
+        print -r -- "Export a Google Drive document and file it into intake/ as Markdown."
+        print -r -- ""
+        print -r -- "  -f, --format FMT   export format (docx, csv, html, pdf, txt, xlsx, pptx)"
+        print -r -- "  -o, --out DIR      destination directory (default: <org>/intake)"
+        print -r -- "  -g, --gid N        sheet tab id, for spreadsheets"
+        print -r -- "  -t, --timeout SEC  how long to wait for the download (default: 90)"
+        print -r -- "  -k, --keep         keep the raw export in ~/Downloads"
+        print -r -- "  -F, --force        overwrite an existing destination file"
+        print -r -- "  -n, --dry-run      resolve and show the plan, download nothing"
+        print -r -- "  -h, --help         this message"
+        (( $#o_help )) && return 0 || return 1
+    fi
+
+    local arg=$1
+    local dldir=${GDOC_DOWNLOADS:-$HOME/Downloads}
+    local orgdir=${ORG_REPO_DIR:-$HOME/Documents/org}
+    local outdir=${${o_out[2]:-$orgdir/intake}%/}
+    local timeout=${o_time[2]:-90}
+
+    (( $+commands[pandoc] )) || { _gdoc_say "gdoc: pandoc is not installed"; return 1 }
+
+    #----------------------------------------------------------------- resolve
+    local line
+    line=$(_gdoc_resolve $arg gdoc) || return 1
+    local kind=${line%%$'\t'*}
+    local id=${${line#*$'\t'}%%$'\t'*}
+    # A sheet tab can come from the URL as well as from -g, which wins.
+    [[ -z ${o_gid[2]} && -n ${line##*$'\t'} ]] && o_gid=(-g ${line##*$'\t'})
+
+    #------------------------------------------------------------ export format
+    # What we ask Google for, and what we turn it into once it lands.
+    local fmt=${o_fmt[2]} url convert
+    case $kind in
+        document)     : ${fmt:=docx} ;;
+        spreadsheet)  : ${fmt:=csv}  ;;
+        presentation) : ${fmt:=pdf}  ;;
+        drawing)      : ${fmt:=pdf}  ;;
+        file)         : ${fmt:=}     ;;
+    esac
+
+    case $fmt in
+        docx|html|csv|txt) convert=$fmt ;;
+        *)                 convert='' ;;    # pdf, xlsx, pptx: kept as they are
+    esac
+
+    case $kind in
+        file) url="https://drive.google.com/uc?export=download&id=$id" ;;
+        presentation|drawing)
+            local seg=presentation
+            [[ $kind == drawing ]] && seg=drawings
+            url="https://docs.google.com/$seg/d/$id/export/$fmt" ;;
+        spreadsheet)
+            url="https://docs.google.com/spreadsheets/d/$id/export?format=$fmt"
+            [[ -n ${o_gid[2]} ]] && url+="&gid=${o_gid[2]}" ;;
+        document)
+            url="https://docs.google.com/document/d/$id/export?format=$fmt" ;;
+    esac
+
+    # The link that goes into the note: where a human wants to land.
+    local srcurl
+    case $kind in
+        file)         srcurl="https://drive.google.com/file/d/$id/view" ;;
+        spreadsheet)  srcurl="https://docs.google.com/spreadsheets/d/$id/edit" ;;
+        presentation) srcurl="https://docs.google.com/presentation/d/$id/edit" ;;
+        drawing)      srcurl="https://docs.google.com/drawings/d/$id/edit" ;;
+        *)            srcurl="https://docs.google.com/document/d/$id/edit" ;;
+    esac
+
+    [[ $kind == presentation && -z ${o_fmt[2]} ]] && \
+        _gdoc_say "gdoc: this is a deck — gslides converts it to Markdown with the speaker notes"
+
+    _gdoc_say "Type:     $kind"
+    _gdoc_say "Id:       $id"
+    _gdoc_say "Export:   $url"
+    _gdoc_say "Into:     $outdir"
+    if (( $#o_dry )); then
+        _gdoc_say ""
+        _gdoc_say "Dry run: nothing downloaded."
+        return 0
+    fi
+
+    #---------------------------------------------------------------- download
+    _gdoc_say ""
+    local dl
+    dl=$(_gdoc_download $url "$fmt" $timeout gdoc) || return 1
+
+    #----------------------------------------------------------------- convert
+    local title=${dl:t:r}
+    title=${title%% \(<->\)}                # drop the browser's " (1)" suffix
+    local slug=$(_gdoc_slug $title)
+    [[ -n $slug ]] || slug=$id
+
+    mkdir -p -- $outdir || return 1
+
+    local payload out
+    if [[ -n $convert ]]; then
+        out=$outdir/$slug.md
+    else
+        payload=$outdir/$slug.${dl:e:l}
+        out=$outdir/$slug.md                # the stub that carries the source
+    fi
+
+    if (( ! $#o_force )); then
+        local existing
+        for existing in $out $payload; do
+            [[ -n $existing && -e $existing ]] && {
+                _gdoc_say "gdoc: $existing already exists (use -F to overwrite)"
+                return 1
+            }
+        done
+    fi
+
+    local today=$(date +%F)
+    local frontmatter="---
+source: $srcurl
+title: \"${title//\"/\'}\"
+captured: $today
+---
+"
+
+    if [[ -n $convert ]]; then
+        # Images land in <slug>-img/ next to the note, so that `mvdoc` carries
+        # them along when /intake files it.
+        local body=$outdir/.gdoc-$$.md
+        ( cd -- $outdir && pandoc -f $convert -t gfm --wrap=none \
+              --extract-media="$slug-img" -o ${body:t} -- $dl ) || {
+            _gdoc_say "gdoc: pandoc failed to convert ${dl:t}"
+            rm -f -- $body
+            return 1
+        }
+
+        # Google Docs bolds the text of its headings, so they arrive as
+        # "## **Title**"; the emphasis is noise once it is a real heading.
+        sed -i '' -E 's/^(#{1,6}) \*\*(.+)\*\*[[:space:]]*$/\1 \2/' $body
+
+        # pandoc buries the images one level deeper than it needs to.
+        if [[ -d $outdir/$slug-img/media ]]; then
+            mv -- $outdir/$slug-img/media/*(N) $outdir/$slug-img/
+            rmdir -- $outdir/$slug-img/media 2>/dev/null
+            # The pattern has to come from a variable: quoting does not stop
+            # zsh from reading the first "/" in "${x//a/b/c}" as the end of
+            # the pattern, and the replacement then silently does nothing.
+            local content=$mapfile[$body] from=$slug-img/media/ to=$slug-img/
+            mapfile[$body]=${content//$from/$to}
+        fi
+
+        mapfile[$out]=$frontmatter$'\n'$mapfile[$body]
+        rm -f -- $body
+    else
+        mv -- $dl $payload || return 1
+        mapfile[$out]="$frontmatter
+# $title
+
+Exported as [${payload:t}](${payload:t}) — a layout-preserving export, not
+converted to Markdown. Summarize it here so the content is searchable.
+"
+    fi
+
+    #-------------------------------------------------------------------- tidy
+    if [[ -e $dl ]]; then
+        if (( $#o_keep )); then
+            _gdoc_say "Kept the raw export at $dl"
+        else
+            rm -f -- $dl
+        fi
+    fi
+
+    local -a images=( $outdir/$slug-img/*(N.) )
+    _gdoc_say ""
+    _gdoc_say "Wrote ${out:t}$( [[ -n $payload ]] && print -n -- " and ${payload:t}")\
+$( (( $#images )) && print -n -- " with $#images image(s)") to $outdir"
+    _gdoc_say "Run /intake to file it."
+
+    print -r -- $out
+}
