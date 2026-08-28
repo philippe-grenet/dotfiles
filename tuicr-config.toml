@@ -1,0 +1,5 @@
+# See https://github.com/agavra/tuicr/blob/main/docs/CONFIG.md
+theme = "catppuccin-mocha"
+ignore_whitespace = true
+comment_vim = false
+username = "Philippe"

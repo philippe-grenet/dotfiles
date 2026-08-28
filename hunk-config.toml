@@ -1,6 +1,0 @@
-theme = "catppuccin-mocha"
-mode = "auto"
-watch = false
-line_numbers = true
-wrap-lines = false
-menu_bar = true

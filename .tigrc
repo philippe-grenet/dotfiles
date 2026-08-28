@@ -1,0 +1,39 @@
+set main-options = --all
+
+# Catppuccin Mocha theme for Tig
+#
+# Palette approximated using terminal ANSI colors.
+# Works best when your terminal uses Catppuccin Mocha colors.
+
+# General UI
+color default           white   default
+color cursor            black   blue
+color title-focus       black   blue
+color title-blur        white   default
+
+# Git refs
+color main-head         green   default
+color main-local        blue    default
+color main-remote       cyan    default
+color main-tag          yellow  default
+color main-local-tag    yellow  default
+color main-ref          magenta default
+
+# Commit information
+color author            green   default
+color date              yellow  default
+color id                blue    default
+
+# Diff
+color diff-header       blue    default
+color diff-chunk        cyan    default
+color diff-add          green   default
+color diff-del          red     default
+
+# Search / selection
+color search-result     black   yellow
+
+# Status
+color status-header     blue    default
+color status-section    magenta default
+color status-onbranch   green   default

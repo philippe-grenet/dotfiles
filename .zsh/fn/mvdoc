@@ -5,6 +5,10 @@
 #
 #   mvdoc architecture/calcrt-bql-convergence.org ~/Documents/org/calcrt
 #
+# Assets are found through the document's native link syntax and through HTML
+# src="…" attributes, which is how a converted Google Doc references the images
+# extracted from it.
+#
 # Linked assets that live under the document's own directory are moved to the
 # same relative sub-path under the destination (img/foo.png stays img/foo.png),
 # so those links keep working untouched.  Links that cannot move (other
@@ -14,6 +18,19 @@
 #
 # `git mv` is used when the file is tracked and both ends live in the same
 # repository; --no-git forces plain `mv`.
+
+# Emit one "delimiter \x01 target \x01 delimiter" record per match of the -o
+# regex $1 in file $4, with the literal delimiters $2 and $3 stripped off the
+# match to leave the target.  Carrying the delimiters along lets a document mix
+# link syntaxes and still be rewritten unambiguously.
+_mvdoc_collect() {
+    local m sep=$'\x01'
+    for m in ${(f)"$(grep -oE -- $1 $4 2>/dev/null)"}; do
+        m=${m#"$2"}
+        m=${m%"$3"}
+        [[ -n $m ]] && print -r -- "$2$sep$m$sep$3"
+    done
+}
 
 # Relative path from directory $2 to path $1; both absolute and normalized.
 _mvdoc_relpath() {
@@ -47,7 +64,8 @@ function mvdoc() {
     if (( $#o_help )) || (( $# != 2 )); then
         print -r -- "Usage: mvdoc [options] <file.org|file.md> <destination>"
         print -r -- ""
-        print -r -- "Move an org or Markdown file plus the images and diagrams it links to."
+        print -r -- "Move an org or Markdown file plus the images and diagrams it links to,"
+        print -r -- "through native links or HTML src=\"…\" attributes."
         print -r -- "<destination> is a directory to move into, created if needed, or a new"
         print -r -- ".org/.md path to move and rename in one go."
         print -r -- ""
@@ -94,23 +112,28 @@ function mvdoc() {
     fi
 
     #-------------------------------------------------------------------- links
-    # Extract the link targets, as they are written in the file.
-    local -a tokens
-    local wrap_l wrap_r
+    # Extract the link targets, as they are written in the file, each keeping
+    # the delimiters that surround it.  A document carries its own native link
+    # syntax, plus HTML src= attributes in either flavour: converted Google Docs
+    # reference their images that way rather than as native links.
+    local sep=$'\x01'
+    local -a forms
     if [[ ${src:e:l} == org ]]; then
-        wrap_l='[[' wrap_r=']'
-        tokens=( ${${${(f)"$(grep -oE '\[\[[^]]+\]' -- $src)"}#\[\[}%\]} )
+        forms+=( ${(f)"$(_mvdoc_collect '\[\[[^]]+\]' '[[' ']' $src)"} )
     else
-        wrap_l='](' wrap_r=')'
-        tokens=( ${${${(f)"$(grep -oE '\]\([^)]+\)' -- $src)"}#\]\(}%\)} )
+        forms+=( ${(f)"$(_mvdoc_collect '\]\([^)]+\)' '](' ')' $src)"} )
     fi
+    forms+=( ${(f)"$(_mvdoc_collect 'src="[^"]+"' 'src="' '"' $src)"} )
+    forms+=( ${(f)"$(_mvdoc_collect "src='[^']+'" "src='" "'" $src)"} )
+    forms=( ${(u)${forms:#}} )
 
     local -A target       # link as written -> absolute path it points to
     local -A kind         # absolute path   -> move | keep | missing
     local -A dest         # absolute path   -> where it ends up
-    local link tgt i
+    local link tgt i rec rest wrap_l wrap_r
 
-    for link in $tokens; do
+    for rec in $forms; do
+        link=${${rec#*$sep}%$sep*}
         [[ -z $link || -n ${target[$link]} ]] && continue
         tgt=${link#file:}
         tgt=${tgt%%::*}                       # org search suffix
@@ -141,9 +164,13 @@ function mvdoc() {
     local -a rw_old rw_new conflicts
     local new abs
 
-    for link in ${(k)target}; do
+    for rec in $forms; do
+        wrap_l=${rec%%$sep*}
+        rest=${rec#*$sep}
+        link=${rest%$sep*}
+        wrap_r=${rest##*$sep}
         abs=${target[$link]}
-        [[ ${kind[$abs]} == missing ]] && continue
+        [[ -z $abs || ${kind[$abs]} == missing ]] && continue
         # Rebuild the link the way it was written, pointing at the new location.
         tgt=${link#file:}
         local prefix='' suffix='' body=$tgt

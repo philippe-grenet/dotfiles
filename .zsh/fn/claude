@@ -9,5 +9,7 @@ claude() {
         TERM="$TERM" \
         EDITOR="$EDITOR" \
         VISUAL="$EDITOR" \
+        HERDR_ENV="$HERDR_ENV" \
+        GDRIVE="$GDRIVE" \
         /opt/homebrew/bin/claude "$@"
 }

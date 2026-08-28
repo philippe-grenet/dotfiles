@@ -44,8 +44,20 @@
 
 	Kompare = difftool -t kompare
 
-    # Show the URL for the origin repo
-    origin = config --get remote.origin.url
+    # Show the URL(s) for the origin repo. Handles remotes with several
+    # pushurl entries (push to bbgithub + github); prints a single line when
+    # the fetch and push URLs are the same.
+    origin = "!f() { \
+      fetch=$(git config --get-all remote.origin.url); \
+      if [ -z \"$fetch\" ]; then echo 'no remote named origin' >&2; exit 1; fi; \
+      push=$(git config --get-all remote.origin.pushurl) || push=\"$fetch\"; \
+      if [ \"$fetch\" = \"$push\" ]; then \
+        echo \"$fetch\"; \
+      else \
+        echo \"$fetch\" | sed 's/^/fetch  /'; \
+        echo \"$push\"  | sed 's/^/push   /'; \
+      fi; \
+    }; f"
 
     # Date/time of last commit
     last = log -1 --abbrev-commit --decorate --format=format:'%C(bold blue)%h%C(reset) %C(bold green)(%ar)%C(reset) %s %C(dim white)- %an%C(reset)'
