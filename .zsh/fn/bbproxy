@@ -1,25 +1,55 @@
 #!/bin/zsh
 
 # Turn BB proxy on and off.
+# Both the lower and upper case variables are set, since tools disagree on
+# which one they honor.
 # Usage:
-#   $ bborpxy     => show status
+#   $ bbproxy     => show status; returns 1 unless the proxy is fully on, so
+#                    `bbproxy && git push` only pushes through the proxy
 #   $ bbproxy on
 #   $ bbproxy off
-bbproxy() {
-    if [ "$#" -eq 0 ]; then
-       echo "http_proxy=$http_proxy"
-       echo "https_proxy=$https_proxy"
-    elif [ "$#" -eq 1 ]; then
-        if [[ "$1" == "on" ]]; then
-            export http{,s}_proxy="http://proxy.bloomberg.com:81"
-        elif [[ "$1" == "off" ]]; then
-            unset http{,s}_proxy
-        else
-            echo "Usage: bbproxy [on|off]. With no argument, print the proxy status."
-            #exit 1
-        fi
+
+# Print the proxy status: ON, OFF, or PARTIAL if the variables disagree.
+# Return 0 only if ON.
+_bbproxy_status() {
+    local vars=(http_proxy https_proxy HTTP_PROXY HTTPS_PROXY)
+    local v nset=0 values=()
+    for v in $vars; do
+        [[ -n ${(P)v} ]] && (( nset++ )) && values+=${(P)v}
+    done
+    values=(${(u)values})
+    if (( nset == 0 )); then
+        print -P "Proxy: %F{red}OFF%f"
+        return 1
+    elif (( nset == ${#vars} && ${#values} == 1 )); then
+        print -P "Proxy: %F{green}ON%f  %F{8}${values[1]//\%/%%}%f"
     else
-        echo "Usage: bbproxy [on|off]. With no argument, print the proxy status."
-        #exit 1
+        print -P "Proxy: %F{yellow}PARTIAL%f"
+        local value unset_str="%F{8}<unset>%f"
+        for v in $vars; do
+            value=${(P)v}
+            print -P "  $v=${${value//\%/%%}:-$unset_str}"
+        done
+        return 1
     fi
+}
+
+bbproxy() {
+    case "$*" in
+        "")
+            _bbproxy_status
+            ;;
+        on)
+            export http{,s}_proxy="http://proxy.bloomberg.com:81"
+            export HTTP{,S}_PROXY="http://proxy.bloomberg.com:81"
+            ;;
+        off)
+            unset http{,s}_proxy HTTP{,S}_PROXY
+            ;;
+        *)
+            echo "Usage: bbproxy [on|off]. With no argument, print the proxy status"
+            echo "and return 1 unless it is on (so 'bbproxy && git push' works)."
+            return 1
+            ;;
+    esac
 }

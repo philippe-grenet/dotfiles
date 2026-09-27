@@ -1,0 +1,112 @@
+#!/bin/zsh
+
+# Download a single file from a bbgithub (or github) repo into the current
+# directory, without cloning anything.
+#
+# The first argument is owner/repo followed by the path of the file *inside*
+# the repository. The second argument renames the downloaded file, and the
+# third picks a branch; without it, the repo's own default branch is used, so
+# master vs main is never something to remember.
+#
+# Ex: ghget SatyaChintapalli/sao-configs/docs/sao_segregation/README.md
+#         => ./README.md, from the default branch
+#     ghget SatyaChintapalli/sao-configs/docs/sao_segregation/README.md \
+#           sao-segregation.md docs
+#         => ./sao-segregation.md, from the docs branch
+#     ghget -b docs SatyaChintapalli/sao-configs/docs/index.md
+#         => ./index.md, from the docs branch, no renaming
+#     ghget -g cli/cli/README.md
+#         => from github.com instead of bbgithub
+#
+# An existing file is never clobbered silently: use -f to overwrite it.
+function ghget() {
+    emulate -L zsh
+
+    local host="bbgithub.dev.bloomberg.com"
+    local branch="" force=0
+
+    while [[ "$1" == -* ]]; do
+        case "$1" in
+            -b|--branch) branch="$2"; shift 2 ;;
+            -H|--host)   host="$2"; shift 2 ;;
+            -g|--github) host="github.com"; shift ;;
+            -f|--force)  force=1; shift ;;
+            -h|--help)
+                cat <<'USAGE'
+Usage: ghget [-b BRANCH] [-H HOST] [-g] [-f] OWNER/REPO/PATH [NAME] [BRANCH]
+
+Downloads one file from a repository into the current directory, with no clone.
+
+Arguments:
+  OWNER/REPO/PATH   e.g. SatyaChintapalli/sao-configs/docs/index.md
+                    PATH is the path inside the repo, not a URL
+  NAME              name to save it as (default: the file's own name)
+  BRANCH            branch to read from (default: the repo's default branch)
+
+Options:
+  -b, --branch BRANCH  branch, same as the third argument
+  -H, --host HOST      git host (default bbgithub.dev.bloomberg.com)
+  -g, --github         shorthand for --host github.com
+  -f, --force          overwrite the destination file if it exists
+  -h, --help           this message
+USAGE
+                return 0 ;;
+            --) shift; break ;;
+            *)  echo "ghget: unknown option '$1' (try: ghget --help)" >&2; return 1 ;;
+        esac
+    done
+
+    local spec="$1" name="$2"
+    [[ -n "$3" ]] && branch="$3"
+
+    if [[ -z "$spec" ]]; then
+        echo "ghget: missing OWNER/REPO/PATH (try: ghget --help)" >&2
+        return 1
+    fi
+    if (( ! $+commands[gh] )); then
+        echo "ghget: gh is not installed" >&2
+        return 1
+    fi
+
+    # Split owner/repo/the/rest/of/the/path.
+    local owner repo rel rest
+    owner="${spec%%/*}"; rest="${spec#*/}"
+    repo="${rest%%/*}";  rel="${rest#*/}"
+    if [[ -z "$owner" || -z "$repo" || -z "$rel" || "$rel" == "$rest" ]]; then
+        echo "ghget: '$spec' is not OWNER/REPO/PATH" >&2
+        return 1
+    fi
+
+    [[ -z "$name" ]] && name="${rel:t}"
+    if [[ -e "$name" && $force -eq 0 ]]; then
+        echo "ghget: $name already exists (use -f to overwrite)" >&2
+        return 1
+    fi
+
+    # No branch given: ask the repo which one it considers the default.
+    if [[ -z "$branch" ]]; then
+        branch=$(gh api --hostname "$host" "repos/$owner/$repo" --jq '.default_branch' 2>/dev/null)
+        if [[ -z "$branch" ]]; then
+            echo "ghget: cannot read $owner/$repo on $host" >&2
+            return 1
+        fi
+    fi
+
+    # Download to a temp file first, so a failure leaves the destination alone.
+    local tmp err
+    tmp=$(mktemp "${TMPDIR:-/tmp}/ghget.XXXXXX") || return 1
+    err=$(mktemp "${TMPDIR:-/tmp}/ghget-err.XXXXXX") || return 1
+    if ! gh api --hostname "$host" \
+         -H 'Accept: application/vnd.github.raw' \
+         "repos/$owner/$repo/contents/$rel?ref=$branch" > "$tmp" 2>"$err"; then
+        echo "ghget: cannot fetch $rel from $owner/$repo@$branch" >&2
+        sed 's/^/  /' "$err" >&2
+        /bin/rm -f "$tmp" "$err"
+        return 1
+    fi
+    /bin/rm -f "$err"
+
+    /bin/mv "$tmp" "$name" || return 1
+    /bin/chmod 644 "$name"
+    echo "$name  <-  $owner/$repo@$branch:$rel"
+}

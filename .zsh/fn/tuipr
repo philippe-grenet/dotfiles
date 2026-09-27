@@ -1,0 +1,102 @@
+#!/bin/zsh
+
+# Open a pull request in tuicr, with the whole PR diff.
+#
+# `tuicr pr N` on its own resolves the diff to the newest commit only. On a
+# branch whose tip is a merge commit that means you see one hunk instead of the
+# PR, and the inline review comments have no lines to attach to, so they never
+# show up. Passing an explicit revset covering the full PR fixes it.
+#
+# The base branch is read from the PR itself, so this works whether the repo
+# uses master, main or anything else, and whether or not the PR branch is the
+# one you have checked out.
+#
+# Ex: tuipr 131             => review PR 131 of the current repo
+#     tuipr 131 -p docs     => extra arguments are forwarded to tuicr
+#
+# Once inside tuicr: c adds a line comment, m/M jump between comments,
+# `:comments all` also shows resolved threads, and `:submit comment` pushes
+# your comments to the forge.
+
+function tuipr() {
+    emulate -L zsh
+
+    if [[ "$1" == -h || "$1" == --help ]]; then
+        cat <<'USAGE'
+Usage: tuipr <pr-number> [tuicr-args...]
+
+Opens a pull request in tuicr with the full PR diff, so that the inline review
+comments show up against their lines.
+
+Arguments:
+  pr-number      pull request number in the current repository
+  tuicr-args     any extra options, forwarded to `tuicr pr`
+USAGE
+        return 0
+    fi
+
+    local pr="$1"
+    if [[ -z "$pr" ]]; then
+        echo "tuipr: missing PR number (try: tuipr --help)" >&2
+        return 1
+    fi
+    if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
+        echo "tuipr: '$pr' is not a PR number" >&2
+        return 1
+    fi
+    shift
+
+    if (( ! $+commands[tuicr] )); then
+        echo "tuipr: tuicr is not installed" >&2
+        return 1
+    fi
+    if [[ $(git rev-parse --is-inside-work-tree 2> /dev/null) != 'true' ]]; then
+        echo "tuipr: not in a git repository" >&2
+        return 1
+    fi
+
+    # The PR knows its own base and head, so there is nothing to guess.
+    local base head
+    if (( $+commands[gh] )); then
+        base=$(gh pr view "$pr" --json baseRefName --jq .baseRefName 2> /dev/null)
+        head=$(gh pr view "$pr" --json headRefName --jq .headRefName 2> /dev/null)
+    fi
+
+    # No gh, or it could not see the PR: fall back to the remote's default
+    # branch, then to whichever of main/master exists.
+    if [[ -z "$base" ]]; then
+        base=${$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2> /dev/null)##*/}
+    fi
+    if [[ -z "$base" ]]; then
+        local b
+        for b in main master; do
+            if git show-ref --verify --quiet "refs/remotes/origin/$b"; then
+                base=$b
+                break
+            fi
+        done
+        [[ -n "$base" ]] && echo "tuipr: assuming base branch '$base'"
+    fi
+    if [[ -z "$base" ]]; then
+        echo "tuipr: cannot work out the base branch; pass -r yourself" >&2
+        return 1
+    fi
+
+    git fetch --quiet origin "$base" 2> /dev/null
+
+    # Other end of the range: the checked-out branch when it is the PR branch,
+    # otherwise the PR head fetched straight from the remote. Note that the
+    # order matters, this fetch has to come after the one for the base branch
+    # because both of them move FETCH_HEAD.
+    local tip=HEAD current
+    current=$(git rev-parse --abbrev-ref HEAD 2> /dev/null)
+    if [[ -n "$head" && "$head" != "$current" ]]; then
+        if git fetch --quiet origin "refs/pull/$pr/head" 2> /dev/null; then
+            tip=FETCH_HEAD
+        else
+            echo "tuipr: cannot fetch the head of PR $pr, reviewing $current instead" >&2
+        fi
+    fi
+
+    tuicr pr "$pr" -r "origin/$base..$tip" "$@"
+}

@@ -13,20 +13,20 @@ management and application launching.
 
 | Shortcut | Description                                                         |
 |----------|---------------------------------------------------------------------|
-| `⌘⌥←`    | Move window to left half of screen                                  |
-| `⇧⌘⌥←`   | Move window to left 1/3 of screen                                   |
-| `⌘⌥→`    | Move window to right half of screen                                 |
-| `⇧⌘⌥→`   | Move window to right 1/3 of screen                                  |
-| `⌘⌥↑`    | Maximize window vertically (preserve horizontal position and width) |
-| `⌘⌥↓`    | Center window horizontally at half screen width (full height)       |
+| `⌃⌥⌘←`    | Move window to left half of screen                                  |
+| `⇧⌃⌥⌘←`   | Move window to left 1/3 of screen                                   |
+| `⌃⌥⌘→`    | Move window to right half of screen                                 |
+| `⇧⌃⌥⌘→`   | Move window to right 1/3 of screen                                  |
+| `⌃⌥⌘↑`    | Maximize window vertically (preserve horizontal position and width) |
+| `⌃⌥⌘↓`    | Center window horizontally at half screen width (full height)       |
 
 #### Multi-Monitor Support
 
 | Shortcut | Description                                                |
 |----------|------------------------------------------------------------|
-| `⌘⌥1`    | Move window to screen 1 (preserves relative position/size) |
-| `⌘⌥2`    | Move window to screen 2 (preserves relative position/size) |
-| `⌘⌥3`    | Move window to screen 3 (preserves relative position/size) |
+| `⌃⌥⌘1`    | Move window to screen 1 (preserves relative position/size) |
+| `⌃⌥⌘2`    | Move window to screen 2 (preserves relative position/size) |
+| `⌃⌥⌘3`    | Move window to screen 3 (preserves relative position/size) |
 
 Screens are ordered deterministically from left-to-right, then top-to-bottom.
 
@@ -37,7 +37,7 @@ Screens are ordered deterministically from left-to-right, then top-to-bottom.
 | `⌃⌥⌘D`   | Dictionary         |
 | `⌃⌥⌘C`   | Calendar           |
 | `⌃⌥⌘E`   | Emacs              |
-| `⌃⌥⌘T`   | iTerm              |
+| `⌃⌥⌘T`   | terminal (Ghostty) |
 | `⌃⌥⌘S`   | Safari             |
 | `⌃⌥⌘G`   | Google Chrome      |
 | `⌃⌥⌘V`   | Visual Studio Code |
@@ -94,7 +94,7 @@ that directory is sourced at startup, one function per file.
 | `save <file>`                     | Copy `<file>` to `~/Scratch`                                                             |
 | `em [file...]`                    | Start the Emacs daemon if none is running, then open a client frame                      |
 | `killem`                          | Kill the Emacs daemon                                                                    |
-| `bbproxy [on\|off]`               | Turn the Bloomberg proxy on or off; with no argument, print its status                   |
+| `bbproxy [on\|off]`               | Turn the Bloomberg proxy on or off; no argument: status, fails if off (`bbproxy && …`) |
 | `bootstrap`                       | Download and run the Bloomberg mac bootstrap                                             |
 | `ssh-dev <machine>`               | ssh to a dev machine through the dev gateway                                             |
 | `last-reboot`                     | Time since the last reboot, colored green / orange / red past 5 and 7 days               |

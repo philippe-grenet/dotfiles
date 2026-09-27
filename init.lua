@@ -9,7 +9,9 @@ end
 
 
 -- Move focused window to the left half of the screen
-hs.hotkey.bind({"cmd", "alt"}, "Left", function()
+-- Note: ⌃⌥⌘←/→ must not be bound to Mission Control's "Move left/right a space"
+-- in System Settings, even disabled, or macOS reserves them and the bind fails.
+hs.hotkey.bind({"cmd", "alt", "ctrl"}, "Left", function()
     log.df("Move window to left half of the screen")
     local win = hs.window.focusedWindow()
     -- log.df("window win: %s", tostring(win))
@@ -30,7 +32,7 @@ hs.hotkey.bind({"cmd", "alt"}, "Left", function()
 end)
 
 -- Move focused window to the left 1/3 of the screen
-hs.hotkey.bind({"shift", "cmd", "alt"}, "Left", function()
+hs.hotkey.bind({"shift", "cmd", "alt", "ctrl"}, "Left", function()
     log.df("Move window to left 1/3 of the screen")
     local win = hs.window.focusedWindow()
     -- log.df("window win: %s", tostring(win))
@@ -51,7 +53,7 @@ hs.hotkey.bind({"shift", "cmd", "alt"}, "Left", function()
 end)
 
 -- Move focused window to the right 1/3 of the screen
-hs.hotkey.bind({"shift", "cmd", "alt"}, "Right", function()
+hs.hotkey.bind({"shift", "cmd", "alt", "ctrl"}, "Right", function()
     log.df("Move window to right 1/3 of the screen")
     local win = hs.window.focusedWindow()
     -- log.df("window win: %s", tostring(win))
@@ -73,7 +75,7 @@ hs.hotkey.bind({"shift", "cmd", "alt"}, "Right", function()
 end)
 
 -- Move focused window to the right half of the screen
-hs.hotkey.bind({"cmd", "alt"}, "Right", function()
+hs.hotkey.bind({"cmd", "alt", "ctrl"}, "Right", function()
     log.df("Move window to right half of the screen")
     local win = hs.window.focusedWindow()
     -- log.df("window win: %s", tostring(win))
@@ -146,13 +148,13 @@ local function moveWindowToScreen(n)
 end
 
 -- Hotkeys: move to screen 1/2/3
-hs.hotkey.bind({"cmd", "alt"}, "1", function() moveWindowToScreen(1) end)
-hs.hotkey.bind({"cmd", "alt"}, "2", function() moveWindowToScreen(2) end)
-hs.hotkey.bind({"cmd", "alt"}, "3", function() moveWindowToScreen(3) end)
+hs.hotkey.bind({"cmd", "alt", "ctrl"}, "1", function() moveWindowToScreen(1) end)
+hs.hotkey.bind({"cmd", "alt", "ctrl"}, "2", function() moveWindowToScreen(2) end)
+hs.hotkey.bind({"cmd", "alt", "ctrl"}, "3", function() moveWindowToScreen(3) end)
 
 
 -- Make focused window take full vertical space (keep x/width)
-hs.hotkey.bind({"cmd", "alt"}, "Up", function()
+hs.hotkey.bind({"cmd", "alt", "ctrl"}, "Up", function()
   local win = getTargetWindow()
   if not win then
     print("No window found")
@@ -170,7 +172,7 @@ end)
 
 
 -- Center window horizontally at half screen width (full height)
-hs.hotkey.bind({"cmd", "alt"}, "Down", function()
+hs.hotkey.bind({"cmd", "alt", "ctrl"}, "Down", function()
   local win = getTargetWindow()
   if not win then
     print("No window found")
@@ -203,7 +205,8 @@ hs.hotkey.bind({"cmd", "alt", "ctrl"}, 'E', function ()
 end)
 
 hs.hotkey.bind({"cmd", "alt", "ctrl"}, 'T', function ()
-      hs.application.launchOrFocus("/Applications/iTerm.app")
+      -- hs.application.launchOrFocus("/Applications/iTerm.app")
+      hs.application.launchOrFocus("/Applications/Ghostty.app")
 end)
 
 hs.hotkey.bind({"cmd", "alt", "ctrl"}, 'S', function ()
@@ -221,10 +224,6 @@ end)
 hs.hotkey.bind({"cmd", "alt", "ctrl"}, 'K', function ()
       hs.application.launchOrFocus("/Applications/Slack.app")
 end)
-
--- hs.hotkey.bind({"cmd", "alt", "ctrl"}, 'I', function ()
---       hs.application.launchOrFocus("/Applications/'IntelliJ IDEA CE.app'")
--- end)
 
 function open(name)
     return function()
@@ -342,3 +341,6 @@ hs.hotkey.bind({ "cmd", "alt", "ctrl"}, "e", function ()
 end)
 
 ]]
+-- Everything loaded successfully
+
+hs.alert.show("Config reloaded")
